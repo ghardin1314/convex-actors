@@ -4,7 +4,7 @@
   "sideEffects": false,
   "type": "module",
   "scripts": {
-    "dev": "npx convex dev --once && concurrently -r npm:dev:web npm:dev:convex",
+    "dev": "npx convex dev --once && concurrently -r pnpm:dev:web pnpm:dev:convex",
     "dev:web": "vite dev",
     "dev:ts": "tsc -b -w",
     "dev:convex": "npx convex dev",
