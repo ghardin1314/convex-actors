@@ -185,10 +185,26 @@ inspect intermediate state.
 
 ### Step 1.2 — Actor row primitives (`actors.ts`)
 
-**Status:** `todo`
+**Status:** `done`
 
 **Notes:**
-> _none yet_
+> 2026-04-08: Added `actors.ts` with `getActorRow`, `getOrCreateActorRow`,
+> `getMailboxRow`. All plain async fns over `QueryCtx`/`MutationCtx` so
+> upcoming handlers (`enqueue`, `kick`, drain primitives) can compose
+> them inside a single transaction without `runMutation` hops.
+> `getOrCreateActorRow` takes `initialState` as a thunk and only calls it
+> on the insert path — avoids sharing references across actors and
+> avoids paying the allocation on the idempotent re-call path. Invariant
+> is enforced in one place: every `actor` insert is immediately followed
+> by its paired `mailboxState` insert (`generation: 0`, `drain: idle`);
+> nothing else in the component is allowed to insert into these tables.
+> Throws loudly if a re-call ever finds an actor without a mailbox, which
+> would mean the invariant was violated elsewhere.
+> `actors.test.ts` covers: unknown lookup → null; first call creates
+> paired rows with correct initial shape; second call is idempotent
+> (same ids, `initialState` thunk invoked exactly once, state mutations
+> between calls preserved); distinct `(type, name)` tuples stay
+> independent; `getMailboxRow` round-trip. 6 tests, all green.
 
 - `getActorRow(ctx, actorType, name)` — index lookup.
 - `getOrCreateActorRow(ctx, { actorType, name, initialState })` —
@@ -280,6 +296,17 @@ inspect intermediate state.
 ---
 
 ## Phase 3 — App-level container and definitions
+
+> **Branded types retrofit — decide during Phase 3.** Consider introducing
+> a literal-parameterized brand `ActorType<T extends string>` / `ActorName<T>`
+> at the app-level surface (`defineActor`, `ActorSystem`, stubs, `send`,
+> `peek`). Goal: make `stub(counter, "a")` and `stub(ping, "a")` distinct
+> at the type level so cross-type mix-ups fail to compile, and fix the
+> literal in each `defineActor` result. Keep the component internals
+> (`shared.ts`, `actors.ts`, schema, enqueue/kick/drainOps) on plain
+> `string` — brand only at the typed API seam, since validators
+> serialize as `v.string()` either way. Revisit once `defineActor` +
+> stubs exist and there is a real consumer to protect.
 
 ### Step 3.1 — `defineActor`
 
