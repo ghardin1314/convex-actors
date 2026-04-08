@@ -153,10 +153,26 @@ inspect intermediate state.
 
 ### Step 1.1 — Schema
 
-**Status:** `todo`
+**Status:** `done`
 
 **Notes:**
-> _none yet_
+> 2026-04-08: Five tables landed in `schema.ts`. `mailboxState.drain` and
+> `responses.response` reuse `vMailboxDrainState` / `vResponse` from
+> `shared.ts`. Indexes: `actor.by_type_name`, `mailboxState.by_actor`,
+> `messages.by_actor`, `pendingMessages.by_actor_deliverable =
+> [actorId, deliverAt, sendSeq]`, `responses.by_message`,
+> `responses.by_actor`.
+> Dropped denormalized `actorType` from `messages` and `responses`, and
+> `msgType` + `retainUntil` from `responses` — nothing in the drain path
+> reads them, and `(actorType, name)` is immutable on the actor row so
+> they can be re-added later behind an observability query without a
+> migration risk. TTL lives only on the prune cron's read-time policy
+> for now (revisit in Phase 6).
+> No `schema.test.ts` — the originally-planned round-trip + index-order
+> assertions were either duplicating TypeScript's job or testing
+> platform behavior. Upcoming handler tests (`enqueue`, `kick`,
+> `drainOps`) will exercise every table and index through real code
+> paths and fail loudly on any schema mistake.
 
 - Define tables from SPEC §Data model: `actor`, `mailboxState`,
   `messages`, `pendingMessages`, `responses`.
@@ -164,8 +180,8 @@ inspect intermediate state.
   `messages.by_actor`, `pendingMessages.by_actor_deliverable`
   (`[actorId, deliverAt, sendSeq]`), `responses.by_message`,
   `responses.by_actor`.
-- **Test (`schema.test.ts`):** insert one row of each kind inside
-  `t.run`, read back, assert round-trip. Catches validator typos early.
+- ~~**Test (`schema.test.ts`):** insert one row of each kind inside
+  `t.run`, read back, assert round-trip.~~ Dropped — see Notes.
 
 ### Step 1.2 — Actor row primitives (`actors.ts`)
 
