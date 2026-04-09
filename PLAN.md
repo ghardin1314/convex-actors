@@ -514,10 +514,35 @@ inspect intermediate state.
 
 ### Step 3.1 — `defineActor`
 
-**Status:** `todo`
+**Status:** `done`
 
 **Notes:**
-> _none yet_
+> 2026-04-08: Added `convex/actors/defineActor.ts` as a pure identity
+> function. Type parameters pin the literal `type` and infer `StateOf`,
+> `PayloadOf<M>`, `ProjectionOf` from the attached validators /
+> `project` return type. Validator generics are constrained to
+> `Validator<any, "required", any>` (matches Convex's own
+> `GenericValidator` alias — `any` only appears in constraints, never
+> as a cast). Handler `ctx` parameter is typed against a minimal
+> `ActorHandlerCtx` placeholder interface (just `self()` + `now()`)
+> declared in the same file; Step 4.1 will introduce the full
+> `ActorCtx<SelfDef>` from `ctx.ts` with `stub` / `sendSelf` / `fail`.
+> Keeping the placeholder co-located avoids a forward-import cycle and
+> lets handler bodies typecheck today without reaching outside the
+> narrow surface.
+> `defineActor.test.ts` covers: identity (`defineActor(spec) === spec`,
+> proves no side effects), literal-`type` preservation via
+> `expectTypeOf`, runtime presence of the validators, `initialState`
+> shape + type inference, `project` runtime + `ProjectionOf` inference,
+> `StateOf`/`PayloadOf` inference across two message variants, and the
+> no-`project` case projecting to `undefined`. 7 tests. Suite: 5 files
+> / 32 tests passing, `tsc --noEmit -p convex` clean.
+> Not landed here (deferred to the step that actually uses them):
+> handler return-type inference into a per-message success-response
+> type, and the `ActorType<T>` / `ActorName<T>` branded types flagged
+> in the Phase 3 preamble. `defineActor`'s identity-function shape
+> means both can be retrofitted purely at the type level without a
+> runtime change.
 
 - Signature per SPEC §Defining actors. Inputs: `type`, `state`
   validator, `messages` record of payload validators, `initialState`,
