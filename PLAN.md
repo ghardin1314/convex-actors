@@ -554,10 +554,65 @@ inspect intermediate state.
 
 ### Step 3.2 — `ActorSystem` container
 
-**Status:** `todo`
+**Status:** `done`
 
 **Notes:**
-> _none yet_
+> 2026-04-08: Added `convex/actors/system.ts` with `ActorSystem<Defs>`
+> generic over the input definitions record. Constructor walks
+> `Object.values(definitions)` and builds a `byType: Map<string,
+> AnyActorDefinition>` keyed on `definition.type` — not on the record
+> key. This matches SPEC's example (`new ActorSystem(components.actors,
+> { counter, chatRoom })`), where the record key is ergonomic shorthand
+> and the authoritative lookup string (wire-level `actorType`, schema
+> column) is the definition's own `.type` field. Duplicate `.type` across
+> definitions throws at construction time — caught early rather than
+> letting a silent last-write-wins land in the map.
+> `getDefinition(actorType)` throws on unknown type with the list of
+> registered types in the error message (cheap; there will never be
+> many). Also exposed `hasDefinition` for speculative callers and
+> `allDefinitions()` iteration (used by later steps that walk every
+> registered def — e.g. registering drain per-type, or schema-dump
+> helpers).
+> Component type imported as `ComponentApi` from
+> `../components/actors/_generated/component.ts` and re-exported as
+> `ActorsComponent` so app code and tests don't have to reach into
+> `_generated/`. The generated `ComponentApi` currently only lists
+> `enqueue.enqueueMessage`; future steps (drainOps, getResponseRow,
+> recovery) will add handlers and the type will refresh automatically on
+> the next `convex dev`/`codegen` pass.
+> Factory methods (`peek` / `send` / `getResponse` / `drain`) are
+> intentionally **not** on the class yet — each lands in its own step
+> (3.3 send, 3.4 peek, 3.5 getResponse, 4.2 drain). They'll be attached
+> either as instance fields built in the constructor or as lazy getters;
+> deferring the decision until the first one is wired so the shape is
+> informed by the real factory signature (it will likely need to bind
+> `this` and build a registered Convex function, which is easier as a
+> constructor-time assignment than a getter).
+> `system.test.ts` — 6 cases, all green:
+> - retrieve two registered defs by `.type`; `hasDefinition` true on both
+> - unknown type throws with the expected message; `hasDefinition` false
+> - duplicate `.type` across two defs throws at construction
+> - `component` and `definitions` are stored verbatim (reference equality)
+> - `allDefinitions` iterates in insertion order
+> - indexing happens by `.type`, not by the input record's JS key
+>   (`{ myCounter: counter }` → `getDefinition("counter")` works,
+>   `getDefinition("myCounter")` does not)
+> Suite: 6 files / 38 tests passing; `tsc --noEmit -p convex` clean.
+> 2026-04-08 (follow-up): made `getDefinition` generic over the
+> registered `.type` literals. New helpers `RegisteredActorType<Defs>`
+> and `DefinitionByType<Defs, T>`; `getDefinition<T extends
+> RegisteredActorType<Defs>>(t: T): DefinitionByType<Defs, T>` so
+> `system.getDefinition("typo")` is a compile error AND the return type
+> is narrowed to the specific definition (not `AnyActorDefinition`) —
+> literal "counter" → `def.initialState(): { n: number }`. Runtime
+> throw kept as a belt-and-suspenders for untrusted dynamic strings
+> (e.g. `send` decoding an over-the-wire arg). `hasDefinition(string)`
+> is a type guard that narrows the true branch to
+> `RegisteredActorType<Defs> & string`. Tests updated: the
+> unregistered-type test asserts both the `@ts-expect-error` at the
+> call site and the runtime throw; a new test covers the return-type
+> narrowing via `expectTypeOf`. Suite: 6 files / 39 tests green,
+> `tsc --noEmit -p convex` clean.
 
 - `new ActorSystem(component, { [type]: definition })`.
 - Stores definition map by type. Exposes factory methods:
