@@ -36,17 +36,17 @@ export async function getActorRow(
  * (`generation: 0`, `drain: { kind: "idle" }`). On subsequent calls it
  * returns the existing rows untouched.
  *
- * `initialState` is only evaluated when the actor row is missing, so
- * callers pay the cost of a fresh initial state exactly once per actor.
- * It is callable (not a value) so definitions can stash freshly-allocated
- * objects without sharing references across actors.
+ * The actor row is inserted with no `state` field. Populating initial
+ * state is the drain loop's responsibility on first handler invocation,
+ * since only the app-level execution path has access to the actor
+ * definition (and therefore to `definition.initialState()` and the
+ * `state` validator).
  */
 export async function getOrCreateActorRow(
   ctx: MutationCtx,
   args: {
     actorType: string;
     name: string;
-    initialState: () => unknown;
   },
 ): Promise<{ actor: Doc<"actor">; mailbox: Doc<"mailboxState"> }> {
   const existing = await getActorRow(ctx, args.actorType, args.name);
@@ -66,7 +66,6 @@ export async function getOrCreateActorRow(
   const actorId = await ctx.db.insert("actor", {
     actorType: args.actorType,
     name: args.name,
-    state: args.initialState(),
   });
   const mailboxId = await ctx.db.insert("mailboxState", {
     actorId,

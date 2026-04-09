@@ -6,7 +6,10 @@ export default defineSchema({
   actor: defineTable({
     actorType: v.string(),
     name: v.string(),
-    state: v.any(),
+    // Populated by the drain loop on first handler invocation. Absent
+    // until then — the component has no access to the definition
+    // registry, so initial state is the execution loop's responsibility.
+    state: v.optional(v.any()),
   }).index('by_type_name', ['actorType', 'name']),
 
   mailboxState: defineTable({

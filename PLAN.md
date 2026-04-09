@@ -191,20 +191,27 @@ inspect intermediate state.
 > 2026-04-08: Added `actors.ts` with `getActorRow`, `getOrCreateActorRow`,
 > `getMailboxRow`. All plain async fns over `QueryCtx`/`MutationCtx` so
 > upcoming handlers (`enqueue`, `kick`, drain primitives) can compose
-> them inside a single transaction without `runMutation` hops.
-> `getOrCreateActorRow` takes `initialState` as a thunk and only calls it
-> on the insert path — avoids sharing references across actors and
-> avoids paying the allocation on the idempotent re-call path. Invariant
-> is enforced in one place: every `actor` insert is immediately followed
-> by its paired `mailboxState` insert (`generation: 0`, `drain: idle`);
+> them inside a single transaction without `runMutation` hops. Invariant
+> enforced in one place: every `actor` insert is immediately followed by
+> its paired `mailboxState` insert (`generation: 0`, `drain: idle`);
 > nothing else in the component is allowed to insert into these tables.
 > Throws loudly if a re-call ever finds an actor without a mailbox, which
 > would mean the invariant was violated elsewhere.
 > `actors.test.ts` covers: unknown lookup → null; first call creates
 > paired rows with correct initial shape; second call is idempotent
-> (same ids, `initialState` thunk invoked exactly once, state mutations
-> between calls preserved); distinct `(type, name)` tuples stay
-> independent; `getMailboxRow` round-trip. 6 tests, all green.
+> (same ids, externally-patched state preserved); distinct `(type, name)`
+> tuples stay independent; `getMailboxRow` round-trip.
+> 2026-04-08 (revision): dropped the `initialState` thunk arg from
+> `getOrCreateActorRow`. The component has no access to the app-level
+> definition registry, and passing initialState through enqueue was
+> leaking execution-loop concerns into the row-level primitive. Now
+> `actor.state` is `v.optional(v.any())` — populated by the drain loop
+> on first handler invocation, which is the only place that can see
+> `definition.initialState()` and the definition's `state` validator.
+> This also makes bad-initialState failures naturally land as drain
+> defects (SPEC §Initial state) without any special enqueue-time
+> plumbing. Resolves the ugly `initialState: () => null` shim that had
+> been introduced in `enqueue.ts`.
 
 - `getActorRow(ctx, actorType, name)` — index lookup.
 - `getOrCreateActorRow(ctx, { actorType, name, initialState })` —
@@ -220,10 +227,52 @@ inspect intermediate state.
 
 ### Step 2.1 — `enqueueMessage` mutation
 
-**Status:** `todo`
+**Status:** `done`
 
 **Notes:**
-> _none yet_
+> 2026-04-08: Added `enqueue.ts` with `enqueueMessage` mutation + an
+> exported `enqueueMessageHandler(ctx, effects)` helper so tests (and
+> the future drain effect-apply path) can call straight into it without
+> round-tripping through `runMutation`.
+> Deviation from plan args shape: rather than
+> `{ actorType, name, msgType, payload, deliverAt, effectList? }` with a
+> single/list dual mode, the mutation takes a flat
+> `{ effects: Array<...> }`. The single-send path just passes a
+> 1-element array. This collapses two code paths into one and matches
+> the plan's stated intent ("single-send path reuses the same code with
+> a 1-element list") more directly.
+> Batch-efficiency detour: briefly added a `getOrCreateActorIds`
+> batch helper with parallel reads + parallel lazy-creates and
+> `Promise.all` effect inserts, plus a per-target sendSeq counter.
+> Reverted after review: the parallelization wasn't buying a real
+> latency win (Convex transactions are effectively single-threaded
+> for writes) and the per-target counter added complexity without
+> improving any guarantee. Shipping the elegant version instead: a
+> sequential for-loop with an in-call `(actorType, name) -> actorId`
+> cache, `sendSeq = i` (input index) as the deterministic
+> `by_actor_deliverable` tiebreaker. Sequential inserts also make the
+> pending rows' `_creationTime` monotonic in input order, giving a
+> belt-and-suspenders FIFO story. ~20 lines.
+> `sendSeq` is assigned from the effect's index in the input array —
+> repeated targets in one batch retain their original indices
+> (e.g. a batch targeting [a, b, a] gives actor `a` sendSeqs 0 and 2,
+> not 0 and 1). Contiguous per-target numbering would require a
+> per-target counter; deferring unless a drain test shows it matters
+> (cross-transaction ties still fall through to `_creationTime`).
+> Enqueue calls `getOrCreateActorRow` with just `{ actorType, name }`;
+> the row is inserted with no `state` field (`state` is
+> `v.optional(v.any())`). The drain loop populates state on first
+> handler invocation via the app-level definition. This keeps the
+> component free of definition-registry plumbing and makes
+> bad-initialState failures fall out as drain defects without special
+> casing at enqueue time (SPEC §Initial state, revisit retry-count
+> decision in Step 4.5).
+> Does not kick the mailbox (Step 2.3 will wire that in after Step 2.2).
+> `enqueue.test.ts` — 5 cases, all green: new-address creation, repeat
+> address reuse, N-effect batch with sendSeq 0..N-1, multi-target batch
+> with one actor-creation per distinct address, and index order via
+> `by_actor_deliverable` with mixed `deliverAt` values + sendSeq
+> tiebreaker. Full suite: 3 files / 11 tests passing.
 
 - Args: `{ actorType, name, msgType, payload, deliverAt, effectList? }`.
   `effectList` for when this is called from inside a drain to apply an
