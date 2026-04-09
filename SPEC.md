@@ -83,18 +83,35 @@ OCC between send and drain):
 
 A **kick** happens on every `send`:
 
-- **idle** → bump `generation`, schedule `drain({ actorId, generation })`
-  at `deliverAt`, transition to `scheduled`.
-- **scheduled** at a time ≤ new `deliverAt` → do nothing. The existing run
-  will pick up the new row.
-- **scheduled** at a time > new `deliverAt` (need to bring drain forward) →
-  look up the currently-scheduled row via `ctx.db.system.get(scheduledId)`.
-  If it's still `pending`, call `ctx.scheduler.cancel(scheduledId)`. If
-  it's in any other state (`inProgress`, `success`, `failed`, `canceled`)
-  or the row is gone, skip the cancel — there's nothing to cancel. Either
-  way, bump `generation`, schedule a fresh `drain` at the earlier
-  time, and overwrite `scheduled.scheduledId` in `mailboxState`. The
-  reschedule is mandatory; the cancel is best-effort cleanup.
+- **idle** → schedule `drain({ actorId, generation: state.generation })`
+  at `deliverAt`, transition to `scheduled`. Kick reads the current
+  `generation` and passes it through unchanged; see "Drain generation
+  and recovery" for why kick never writes `generation`.
+- **scheduled** at a time ≤ `deliverAt + KICK_EPSILON_MS` → do nothing.
+  The existing run will pick up the new row. The `KICK_EPSILON_MS`
+  slack (default 1 second) prevents pointless cancel-and-reschedule
+  churn when a kick's requested time is only trivially earlier than
+  the existing schedule; any sub-epsilon latency win isn't worth the
+  scheduler row churn.
+- **scheduled** at a time > `deliverAt + KICK_EPSILON_MS` (need to
+  meaningfully bring drain forward) → look up the currently-scheduled
+  row via `ctx.db.system.get(scheduledId)`. If it's still `pending`,
+  call `ctx.scheduler.cancel(scheduledId)`. If it's in any other state
+  (`inProgress`, `success`, `failed`, `canceled`) or the row is gone,
+  skip the cancel and log a warning — a stale `scheduledId` pointer
+  means a previous drain fired without `mailboxState.drain` being
+  updated cleanly. Either way, schedule a fresh `drain` at the earlier
+  time (carrying the current `state.generation` unchanged), and
+  overwrite `scheduled.scheduledId` in `mailboxState`. The reschedule
+  is mandatory; the cancel is best-effort cleanup.
+
+Before any scheduling call, `deliverAt` is clamped by
+`boundScheduledTime`: timestamps more than a year in the past are
+rewritten to `now` ("run ASAP"), and timestamps more than four years
+in the future are rewritten to `now + 1 year`. Both cases are almost
+certainly bugs — clock skew, forgotten units, or a rogue caller — and
+the clamp keeps them from poisoning the scheduler or the no-op epsilon
+comparison on follow-up kicks.
 - **running** → do nothing. The drain will loop.
 
 Kick attempts `ctx.scheduler.cancel` as an **optimization**, not for
@@ -134,9 +151,12 @@ The drain is `drain({ actorId, generation })`. It processes exactly one
 message per transaction:
 
 1. Load `mailboxState`. If `args.generation !== state.generation`, this
-   invocation is stale (superseded by a later kick or by recovery) — return
-   immediately, no state change. Otherwise transition `mailboxState` to
-   `running` (preserving `generation`) and load the actor row.
+   invocation is stale (superseded by recovery, or by a sibling drain
+   that already committed and bumped) — return immediately, no state
+   change. Otherwise bump `state.generation` by one, transition
+   `mailboxState` to `running`, and load the actor row. The bump is the
+   fence: any other scheduled drain that was racing this one now
+   carries a stale `generation` arg and will exit on its own step 1.
 2. Read next deliverable `pendingMessages` row by
    `[actorId, deliverAt, sendSeq]` (see "Send ordering" below). The full
    message payload lives in the permanent `messages` table, referenced by
@@ -167,17 +187,16 @@ message per transaction:
    Convex OCC read/write-conflict retries surface as a distinct exception
    type that the wrapper does **not** catch — those bubble up so Convex
    retries the whole mutation, and they do not increment `attempts`.
-8. Reschedule drain based on remaining work. In all cases bump
-   `generation` first, then schedule with the new value:
-   - another row with `deliverAt <= now()`: bump generation,
-     `runAfter(0, drain, { actorId, generation })`, stay in `running`
-     (the next invocation will take the `running → running` transition via
-     its own generation check);
-   - next row has future `deliverAt`: bump generation,
-     `runAfter(deliverAt - now(), drain, { actorId, generation })`,
+8. Reschedule drain based on remaining work. Step 8 does **not** bump
+   `generation` — the next run will bump on entry at step 1. Schedule
+   with the current `state.generation`:
+   - another row with `deliverAt <= now()`:
+     `runAfter(0, drain, { actorId, generation: state.generation })`,
+     stay in `running`;
+   - next row has future `deliverAt`:
+     `runAfter(deliverAt - now(), drain, { actorId, generation: state.generation })`,
      transition `mailboxState` to `scheduled`;
-   - no rows: transition `mailboxState` to `idle` (no schedule, no need to
-     bump generation — the next kick will).
+   - no rows: transition `mailboxState` to `idle` (no schedule).
 
 One message per transaction gives clean failure semantics, bounded
 transaction size, and natural interleaving of replies and other messages.
@@ -186,26 +205,49 @@ success, `ctx.fail` rolls back cleanly: nothing was ever inserted.
 
 ### Drain generation and recovery
 
-Every `mailboxState` row carries a `generation: number`. Every path that
-would otherwise need to cancel a scheduled drain instead bumps
-`generation` and schedules a new `drain({ actorId, generation })`.
-The drain mutation's first action is to compare `args.generation` against
-`state.generation` and return immediately on mismatch. This makes stale
-runs — older scheduled invocations, double-deliveries, zombie resumes —
+Every `mailboxState` row carries a `generation: number`. Generation is a
+fencing token: every scheduled `drain({ actorId, generation })` carries
+the value of `state.generation` at its scheduling instant, and the
+drain's first action is to compare `args.generation` against
+`state.generation`. A mismatch means this invocation has been superseded
+— older scheduled invocations, double-deliveries, and zombie resumes are
 guaranteed no-ops.
 
-Generation is bumped in three places:
+**Generation is owned by the drain.** It is bumped in exactly two
+places:
 
-1. **Kick (bring drain forward).** When `scheduled` at `T_old` and a send
-   arrives with `deliverAt < T_old`, bump generation and schedule a new
-   run at the earlier time. The old run may still fire but bails.
-2. **Self-reschedule at drain end (step 8).** Bump before scheduling the
-   follow-up run so the transaction's own commit carries the new
-   generation. Bumping isn't strictly required here (there is no competing
-   schedule), but keeping the invariant "every scheduled drain is tagged
-   with the generation at its scheduling instant" is simpler than carving
-   out exceptions.
-3. **Recovery cron.** See below.
+1. **Top of the drain mutation (step 1).** On successful fence check, the
+   drain bumps `state.generation` by one as part of transitioning to
+   `running`. This is the fence: any other scheduled drain racing this
+   one now carries a stale arg and will exit on its own step 1.
+2. **Recovery cron.** See below. Recovery bumps because it is acting in
+   lieu of a drain that never got the chance to bump for itself.
+
+**Kick does not write `generation`.** Neither the `idle → scheduled`
+path nor the bring-forward cancel-and-reschedule path touches the
+counter. Both schedule with the current `state.generation` value. Safety
+of the bring-forward path comes from two facts:
+
+- `ctx.scheduler.cancel` is called first as a best-effort cleanup. If
+  the old scheduled row is still `pending`, cancel removes it and there
+  is no race.
+- If cancel lost the race (the scheduled drain has already started
+  running, or already fired and committed), then either:
+  - It already committed, which means it already bumped to `N+1`. Our
+    newly scheduled drain still carries `N`, so it will exit on its
+    step 1 fence — correct.
+  - It is still running concurrently. Both this transaction and the
+    in-flight drain contend on `mailboxState`; Convex serializes them.
+    Whichever commits first bumps to `N+1`. The loser retries under
+    OCC, re-reads state, and on retry its fence check fails — it exits.
+    Only one drain run actually mutates per scheduled pair.
+
+**Step 8 self-reschedule does not bump either.** The drain's tail
+schedules its follow-up with the same `state.generation` value it just
+wrote at step 1. The follow-up run will bump on its own entry. This
+collapses the three write sites that earlier drafts of the spec
+described into one, matching the workpool reference implementation
+(`.context/workpool/src/component/loop.ts`).
 
 **Recovery cron.** A cron (default: every 5 minutes) scans `mailboxState`
 for rows in `running` whose `startedAt` is older than a threshold (default:
@@ -255,8 +297,9 @@ actor: defineTable({
 
 mailboxState: defineTable({
   actorId: v.id('actor'),
-  // Monotonic generation: bumped by every kick and by recovery. The drain
-  // mutation takes generation as an arg and bails if it no longer matches.
+  // Monotonic generation: bumped at the top of every drain run and by
+  // recovery. Kick reads and re-passes it unchanged. The drain mutation
+  // takes generation as an arg and bails if it no longer matches.
   // See "Drain generation and recovery".
   generation: v.number(),
   drain: v.union(
@@ -331,8 +374,8 @@ responses: defineTable({
 - On first send to a never-seen `(actorType, name)`, `mailboxState` is
   inserted with `{ generation: 0, drain: { kind: 'idle' } }` in the same
   transaction that creates the `actor` row and enqueues the first
-  message. The first kick then bumps generation to 1 and schedules the
-  drain.
+  message. The first kick schedules the drain carrying `generation: 0`;
+  the drain bumps generation to 1 on its first run (step 1).
 - No separate payload table — 1MB doc limit is documented as a message size cap.
 - No `from` field — sender info goes in payload if needed.
 - **`messages` is append-only.** Every send writes one row; the drain never
@@ -820,9 +863,11 @@ mutation). Clients never call the component directly.
   messages.
 - Per-actor drain loop coordinated by a `mailboxState` row (which also
   holds `generation`). At most one *effective* drain at a time, enforced
-  by a generation check at the top of `drain` — kick and recovery
-  both bump generation to invalidate stale runs, and no path calls
-  `ctx.scheduler.cancel`.
+  by a generation check at the top of `drain`: the drain bumps
+  generation on entry (and recovery bumps it when resurrecting a stale
+  `running` mailbox), so any racing or zombie run exits on its fence
+  check. Kick calls `ctx.scheduler.cancel` as a best-effort cleanup on
+  the bring-forward path but never writes generation.
 - Recovery cron periodically sweeps `running` mailboxes older than a
   threshold and reschedules them; any zombie or still-live drain is
   harmlessly invalidated by the generation bump.

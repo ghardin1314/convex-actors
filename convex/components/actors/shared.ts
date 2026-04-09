@@ -26,6 +26,33 @@ export const RECOVERY_PERIOD_MS = 5 * MINUTE;
 /** Total handler attempts before a throw becomes a `defect`. */
 export const MAX_ATTEMPTS = 3;
 
+/**
+ * Kick bring-forward epsilon. If an existing schedule fires within
+ * this window of the new requested `deliverAt`, kick treats it as a
+ * no-op rather than paying the cancel + reschedule cost for a
+ * sub-second latency win. Mirrors workpool's `SECOND` threshold in
+ * `kick.ts`, generalized from "close to now" to "close to the
+ * requested deliverAt" so it also applies to kicks targeting far-future
+ * messages.
+ */
+export const KICK_EPSILON_MS = 1 * SECOND;
+
+/**
+ * Hard guard rails for scheduled timestamps. Mirrors workpool's
+ * `boundScheduledTime`: anything wildly in the past is clamped to
+ * `now` (treat as "run ASAP") and anything absurdly far in the future
+ * is clamped to one year out. Kicks in the past normally come from
+ * clock skew or a test that forgot to clamp `deliverAt`; kicks in the
+ * distant future are almost always a bug.
+ */
+export const YEAR = 365 * DAY;
+export function boundScheduledTime(ms: number): number {
+  const t = now();
+  if (ms < t - YEAR) return t;
+  if (ms > t + 4 * YEAR) return t + YEAR;
+  return ms;
+}
+
 /** Default retention windows per response kind. `undefined` = keep forever. */
 export const RESPONSE_TTL_MS: {
   success: number;

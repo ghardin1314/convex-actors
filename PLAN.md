@@ -297,10 +297,112 @@ inspect intermediate state.
 
 ### Step 2.2 — `kickMailbox` (the scheduling transition)
 
-**Status:** `todo`
+**Status:** `done`
 
 **Notes:**
-> _none yet_
+> 2026-04-08: Added `kick.ts` exporting `kickMailbox(ctx, { actorId,
+> deliverAt, drainFn })` as a plain async helper (not a mutation) so
+> `enqueueMessage`, recovery, and the drain tail can all compose it
+> inside their own transactions. `DrainFnHandle =
+> FunctionHandle<"mutation", { actorId, generation }>` — the handle is
+> passed on every call rather than cached on the mailbox row to avoid
+> surviving stale handles across app redeploys.
+> Four transitions implemented per plan:
+> - `running` → early return, no write
+> - `scheduled` with `at <= deliverAt` → early return, no write (and
+>   critically, no generation bump — skipping the bump here keeps a
+>   concurrent in-flight drain from being spuriously invalidated)
+> - `scheduled` with `at >  deliverAt` → `db.system.get` the existing
+>   scheduledId, `scheduler.cancel` only if its state is `pending`,
+>   then fall through to the idle branch
+> - `idle` (or post-cancel fallthrough) → bump generation,
+>   `scheduler.runAt(deliverAt, drainFn, { actorId, generation })`,
+>   patch `drain: { kind: "scheduled", scheduledId, at: deliverAt }`
+> Tests (`kick.test.ts`, 6 cases, all green — suite: 4 files / 18
+> tests):
+> - idle → scheduled: generation 0→1, scheduledTime matches deliverAt
+> - later-kick no-op: generation/scheduledId/at byte-for-byte unchanged,
+>   still exactly 1 row in `_scheduled_functions`
+> - earlier-kick reschedule: new scheduledId, generation 1→2, old row
+>   state `canceled`, new row state `pending`
+> - running → no-op: byte-for-byte doc equality (`expect(after).toEqual(before)`)
+>   and zero rows in `_scheduled_functions`
+> - stale scheduledId (patched to `state: success`) → cancel skipped,
+>   reschedule still happens, stale row left `success` not `canceled`
+> - 10 concurrent `t.run` kicks with varying deliverAts → end state has
+>   exactly one `pending` scheduled function matching the mailbox's
+>   `drain.scheduledId`
+> Test infra: `makeDrainHandle()` helper uses
+> `createFunctionHandle((api as any).kick.kickMailbox)` solely to get a
+> parseable `function://...` string. convex-test's scheduler only parses
+> the handle — it never resolves the target unless the setTimeout
+> callback fires, and with `vi.useFakeTimers()` it never does. The
+> `as any` cast is because the component's `_generated/api.ts` is
+> `anyApi as any` (component has no own functions registered at the
+> convex.config level yet), and we just need the proxy to respond to
+> the `functionName` symbol so `createFunctionHandle` can serialize it.
+> One tsc/eslint escape hatch: the `ctx.db.patch(staleScheduledId, {
+> state: "success" })` line in the stale-id test casts
+> `ctx.db as any` because `_scheduled_functions` is a system table and
+> the public writer type doesn't expose it. Convex-test allows the
+> write at runtime and it's the only way to simulate a drain that has
+> already completed without actually running it. Acceptable as a
+> test-only shim; will revisit if a nicer seam appears during Phase 5
+> (recovery) where the same state is needed.
+> Step 2.3 will wire this into `enqueueMessage`; the drainFn handle
+> will need to plumb through from the app-level `send` mutation down
+> through `enqueueMessage` as a new arg.
+>
+> 2026-04-08 (SPEC amendment): Generation ownership moved from kick to
+> drain, matching workpool's loop.ts pattern. Kick now reads
+> `mailbox.generation` and passes it through unchanged to
+> `scheduler.runAt`; the idle-branch patch only writes `drain`, not
+> `generation`. SPEC §Drain generation and recovery rewritten: the
+> three bump sites collapsed to two (drain step 1 + recovery). The
+> bring-forward safety argument is unchanged in spirit — best-effort
+> cancel + both-fire-race resolved by whoever bumps first under OCC —
+> but the fencing happens on the drain side instead of the kick side.
+> All six kick tests updated: idle→scheduled, reschedule, stale-id,
+> and concurrent kicks all now assert `generation` stays at 0 (or at
+> the manually-set value in the stale-id test's case, which starts at
+> 1). Added an extra assertion that the scheduled row's args carry the
+> correct `{ actorId, generation }` pair so Phase 4's drain
+> implementation can rely on it. Suite green (4 files / 18 tests).
+>
+> 2026-04-08 (workpool robustness port): Ported three more guards from
+> `.context/workpool/src/component/kick.ts` that aren't about
+> saturated-parallelism semantics (which don't apply to per-actor
+> drains):
+> - `KICK_EPSILON_MS = 1 * SECOND` constant in `shared.ts`. Kick's
+>   no-op check is now `drain.at <= deliverAt + KICK_EPSILON_MS`
+>   rather than strict `<= deliverAt`. Prevents churn when a kick
+>   only shaves sub-second latency off an already-scheduled drain.
+>   Generalized workpool's "close to NOW" framing to "close to the
+>   requested deliverAt" since our deliverAts can be arbitrarily
+>   future-dated.
+> - `boundScheduledTime(ms)` helper in `shared.ts`. Clamps wildly
+>   stale timestamps (> 1y old → now) and absurdly future ones
+>   (> 4y out → now + 1y). Mirrors workpool byte-for-byte. Kick
+>   runs every `deliverAt` through it up front so both the epsilon
+>   comparison and the `scheduler.runAt` call see the same clamped
+>   value. `YEAR` constant added alongside the existing time
+>   helpers.
+> - `console.warn` on the reschedule path when `ctx.db.system.get`
+>   shows the existing `scheduledId` in anything other than
+>   `pending` (or missing entirely). Workpool logs in the same spot.
+>   Not a correctness fix — we still silently fall through to
+>   reschedule — but it surfaces cases where the `drain` pointer
+>   went stale without `mailboxState.drain` being cleaned up, which
+>   would point at a bug in the drain step-8 transition or recovery
+>   handoff.
+> Three new tests added (`kick.test.ts`, now 9 cases total,
+> suite 4 files / 21 tests):
+> - bring-forward within epsilon is a no-op (scheduled at T0+800ms,
+>   kicked to T0: same `scheduledId`, same `at`, one scheduled row)
+> - `deliverAt = T0 - 2*YEAR` clamps to `T0`
+> - `deliverAt = T0 + 10*YEAR` clamps to `T0 + YEAR`
+> SPEC §Per-actor drain loop updated with the epsilon phrasing, the
+> warn-on-stale-id behavior, and a paragraph on `boundScheduledTime`.
 
 - Pure SPEC §Per-actor drain loop logic. Takes `(ctx, actorId, deliverAt)`.
 - Transitions:
