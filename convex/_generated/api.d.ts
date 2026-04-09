@@ -48,8 +48,22 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   actors: {
-    hello: {
-      world: FunctionReference<"query", "internal", {}, string>;
+    enqueue: {
+      enqueueMessage: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          drainFn: string;
+          effects: Array<{
+            actorType: string;
+            deliverAt: number;
+            msgType: string;
+            name: string;
+            payload: any;
+          }>;
+        },
+        Array<string>
+      >;
     };
   };
 };

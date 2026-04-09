@@ -8,7 +8,10 @@
  * @module
  */
 
-import type * as hello from "../hello.js";
+import type * as actors from "../actors.js";
+import type * as enqueue from "../enqueue.js";
+import type * as kick from "../kick.js";
+import type * as shared from "../shared.js";
 
 import type {
   ApiFromModules,
@@ -18,7 +21,10 @@ import type {
 import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
-  hello: typeof hello;
+  actors: typeof actors;
+  enqueue: typeof enqueue;
+  kick: typeof kick;
+  shared: typeof shared;
 }> = anyApi as any;
 
 /**

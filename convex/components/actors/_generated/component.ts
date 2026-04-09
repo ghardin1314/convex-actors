@@ -23,7 +23,22 @@ import type { FunctionReference } from "convex/server";
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
-    hello: {
-      world: FunctionReference<"query", "internal", {}, string, Name>;
+    enqueue: {
+      enqueueMessage: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          drainFn: string;
+          effects: Array<{
+            actorType: string;
+            deliverAt: number;
+            msgType: string;
+            name: string;
+            payload: any;
+          }>;
+        },
+        Array<string>,
+        Name
+      >;
     };
   };

@@ -2,6 +2,7 @@ import { v } from 'convex/values'
 import type { Id } from './_generated/dataModel.js'
 import { mutation, type MutationCtx } from './_generated/server.js'
 import { getOrCreateActorRow } from './actors.js'
+import { kickMailbox, type DrainFnHandle } from './kick.js'
 import { now } from './shared.js'
 
 /**
@@ -20,6 +21,13 @@ export const vEffect = v.object({
 
 const vEnqueueArgs = {
   effects: v.array(vEffect),
+  // `FunctionHandle` serializes as a branded string; we accept it as
+  // `v.string()` at the validator boundary and narrow to `DrainFnHandle`
+  // at the type level inside the handler. The component has no static
+  // reference to the app-level `drain` — callers produce the handle via
+  // `createFunctionHandle(...)` and pass it on every send so a redeploy
+  // that renames the drain function can't leave stale handles around.
+  drainFn: v.string(),
 }
 
 /**
@@ -44,8 +52,12 @@ const vEnqueueArgs = {
 export const enqueueMessage = mutation({
   args: vEnqueueArgs,
   returns: v.array(v.id('messages')),
-  handler: async (ctx, { effects }) => {
-    return await enqueueMessageHandler(ctx, effects)
+  handler: async (ctx, { effects, drainFn }) => {
+    return await enqueueMessageHandler(
+      ctx,
+      effects,
+      drainFn as DrainFnHandle,
+    )
   },
 })
 
@@ -58,6 +70,7 @@ export async function enqueueMessageHandler(
     payload: unknown
     deliverAt: number
   }>,
+  drainFn: DrainFnHandle,
 ): Promise<Array<Id<'messages'>>> {
   const sentAt = now()
   const messageIds: Array<Id<'messages'>> = []
@@ -66,6 +79,14 @@ export async function enqueueMessageHandler(
   // re-targeting the same address only pays one index lookup and only
   // runs the lazy-create branch once.
   const actorIdCache = new Map<string, Id<'actor'>>()
+
+  // Per-actor earliest `deliverAt` so we can issue exactly one kick
+  // per distinct target with the tightest deadline this batch
+  // contributes. Batches targeting two actors → two kicks; a batch
+  // re-targeting the same actor at multiple deliverAts → one kick at
+  // the min. Avoids the redundant second kick a naive per-effect loop
+  // would produce.
+  const earliestByActor = new Map<Id<'actor'>, number>()
 
   // `sendSeq = i` is the input index and acts as
   // the deterministic tiebreaker in `by_actor_deliverable` for effects
@@ -99,6 +120,20 @@ export async function enqueueMessageHandler(
       attempts: 0,
     })
     messageIds.push(messageId)
+
+    const prev = earliestByActor.get(actorId)
+    if (prev === undefined || effect.deliverAt < prev) {
+      earliestByActor.set(actorId, effect.deliverAt)
+    }
+  }
+
+  // Kicks are issued after all inserts so that the kick's state-machine
+  // read of `mailboxState` sees a fully-populated mailbox. Sequential
+  // is intentional — parallelizing wouldn't help (single-threaded
+  // writes) and would only obscure the order of `_scheduled_functions`
+  // rows that tests inspect.
+  for (const [actorId, deliverAt] of earliestByActor) {
+    await kickMailbox(ctx, { actorId, deliverAt, drainFn })
   }
 
   return messageIds

@@ -107,6 +107,19 @@ inspect intermediate state.
 > component dir (since tests/handlers live alongside `_generated/` here,
 > not in a separate `component/` subfolder). `setup.test.ts` boots
 > `convexTest(schema, modules)` inside `t.run` — passes.
+> 2026-04-08 (later): **deleted `test.ts`**. `import.meta.glob` is
+> Vite-only syntax and Convex's push-time module analyzer choked on
+> `import.meta` inside the component dir (`InvalidModules: Failed to
+> analyze test.js`). Convex auto-excludes `*.test.ts` files from
+> analysis, which is why the actual `*.test.ts` siblings don't trip
+> the same error even though they use the same glob. Nothing imported
+> `test.ts` yet (component-internal tests inline their own
+> `import.meta.glob("./**/*.ts")`), so deletion is a no-op for the
+> current suite. When Phase 3+ app-level tests need to mount the
+> component via `t.registerComponent`, re-add the helper outside
+> `convex/` (e.g. at repo root under `test-helpers/`) so Convex never
+> tries to analyze it — mirrors workpool's `src/test.ts` sitting
+> outside `src/component/`.
 > Installed `convex-test`, `vitest`, `immer`, `@edge-runtime/vm` as dev deps.
 > Added `vitest.config.ts` at repo root with `environment: "edge-runtime"`
 > and excluded `.context/**` so workpool's vendored tests don't run.
@@ -432,14 +445,54 @@ inspect intermediate state.
 
 ### Step 2.3 — `enqueueMessage` + kick wiring
 
-**Status:** `todo`
+**Status:** `done`
 
 **Notes:**
-> _none yet_
+> 2026-04-08: `enqueueMessage` now takes a `drainFn: v.string()` arg
+> alongside `effects`. Handler casts it to `DrainFnHandle` and passes
+> it through to `kickMailbox`. Matches workpool's pattern of carrying
+> `FunctionHandle` over the wire as `v.string()` and narrowing at the
+> use site — avoids pulling a validator for branded strings that
+> serialize identically to plain strings anyway.
+> Per-target earliest-deliverAt: plan originally said "min deliverAt
+> across the effect batch" but that conflates multi-target batches.
+> Actual impl maintains an `earliestByActor: Map<Id<"actor">, number>`
+> populated inside the insert loop, then kicks each distinct actor
+> once with its own min. A batch re-targeting the same actor at
+> multiple deliverAts collapses to a single kick at the tightest
+> deadline; a batch targeting N distinct actors produces N kicks.
+> No duplicate kicks, no lost earlier-deadline info.
+> Kicks are issued sequentially after all inserts complete, not
+> interleaved. Two reasons: (1) the kick's state-machine read of
+> `mailboxState` must see the post-insert world, and (2) sequential
+> ordering makes `_scheduled_functions` rows appear in a predictable
+> order for the multi-target test.
+> Test delta: 6 existing tests updated to pass `drainFn` through
+> (drainFn is built inside each `t.run` via `makeDrainHandle()` since
+> `createFunctionHandle` requires a convex runtime — `beforeEach`
+> can't build it, tried and hit a "database used outside backend"
+> syscall error). First test's drain assertion flipped from
+> `{ kind: "idle" }` to `scheduled` + `at === T0`, reflecting the
+> fact that enqueue now leaves mailboxes scheduled, not idle.
+> Three new tests cover the wiring itself:
+> - single-actor mixed-deliverAt batch → kick at the min, not at
+>   `effects[0].deliverAt`; one `_scheduled_functions` row carrying
+>   `{ actorId, generation: 0 }`.
+> - second send at a later deliverAt is a no-op on the scheduler
+>   (same `scheduledId`, same `at`, still one pending row). Covers
+>   the idempotent bring-back-forward path through `kickMailbox`'s
+>   `at <= deliverAt + KICK_EPSILON_MS` early return.
+> - multi-target `[a, b, a]` batch with per-target differing
+>   deliverAts → 2 scheduled rows, each keyed to its own actor with
+>   its own per-target min (a's later `deliverAt: T0 + 500` beats
+>   its earlier `T0 + 2000`). Assert via `args[0].actorId` lookup.
+> Suite: 4 files / 25 tests passing.
 
 - Once 2.1 and 2.2 pass independently, have `enqueueMessage` call
   `kickMailbox(actorId, earliestDeliverAt)` after inserts. Earliest is
-  the min `deliverAt` across the effect batch.
+  the min `deliverAt` across the effect batch — computed **per target
+  actor**, not globally, so multi-target batches kick each distinct
+  address with its own tightest deadline.
 - **Test:** send from cold state schedules a drain at the requested
   `deliverAt`; send #2 at a later time with drain already scheduled
   earlier is a no-op on scheduler.
