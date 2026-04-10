@@ -76,19 +76,13 @@ export const vAddress = v.object({
 });
 export type Address = Infer<typeof vAddress>;
 
-/**
- * Per-actor drain-loop state. Mirrors SPEC §Data model `mailboxState.drain`.
- */
-export const vMailboxDrainState = v.union(
-  v.object({ kind: v.literal("idle") }),
-  v.object({
-    kind: v.literal("scheduled"),
-    scheduledId: v.id("_scheduled_functions"),
-    at: v.number(),
-  }),
-  v.object({ kind: v.literal("running"), startedAt: v.number() }),
+/** Possible drain-loop states for a mailbox. */
+export const vDrainKind = v.union(
+  v.literal("idle"),
+  v.literal("scheduled"),
+  v.literal("running"),
 );
-export type MailboxDrainState = Infer<typeof vMailboxDrainState>;
+export type DrainKind = Infer<typeof vDrainKind>;
 
 /**
  * The three possible outcomes of processing a message. See SPEC §Three

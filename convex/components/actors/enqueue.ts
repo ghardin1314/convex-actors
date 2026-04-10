@@ -100,6 +100,7 @@ export async function enqueueMessageHandler(
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: effect.actorType,
         name: effect.name,
+        executeFn,
       })
       actorId = actor._id
       actorIdCache.set(key, actorId)

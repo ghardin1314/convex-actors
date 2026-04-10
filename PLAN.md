@@ -1053,10 +1053,12 @@ component. Invokes the drain mutation via `t.mutation(api.drain, ...)`.
 
 ### Step 5.1 — Store `executeFn` on mailbox row
 
-**Status:** `todo`
+**Status:** `done`
 
 **Notes:**
-> _none yet_
+> 2026-04-09: Added `executeFn: v.optional(v.string())` to `mailboxState`
+> schema. `kickMailbox` now writes `executeFn` onto the mailbox row
+> alongside the drain state patch. Assertion added to existing kick test.
 
 - Add `executeFn: v.optional(v.string())` to `mailboxState` schema.
   Optional because existing rows won't have it (backfill on first kick).
@@ -1067,10 +1069,14 @@ component. Invokes the drain mutation via `t.mutation(api.drain, ...)`.
 
 ### Step 5.2 — Recovery scan (`recovery.ts`)
 
-**Status:** `todo`
+**Status:** `done`
 
 **Notes:**
-> _none yet_
+> 2026-04-09: `recovery.ts` with `listStuckMailboxes` (internalQuery),
+> `recoverMailbox` (internalMutation), and `runRecoveryScan`
+> (internalAction cron entrypoint). 9 tests in `recovery.test.ts`
+> covering empty, fresh-running, stale, no-executeFn, idle, and
+> concurrent race scenarios.
 
 - Component: `listStuckMailboxes()` query returns rows where
   `drain.kind === "running"` and `drain.startedAt < now -
@@ -1093,10 +1099,12 @@ component. Invokes the drain mutation via `t.mutation(api.drain, ...)`.
 
 ### Step 5.3 — Recovery cron
 
-**Status:** `todo`
+**Status:** `done`
 
 **Notes:**
-> _none yet_
+> 2026-04-09: `crons.ts` defines a 5-minute interval calling
+> `internal.recovery.runRecoveryScan`. The scan action lists stuck
+> mailboxes then recovers each in its own mutation transaction.
 
 - Component-internal cron every 5 minutes calling `recoverMailbox` for
   each result of `listStuckMailboxes()`.

@@ -46,9 +46,10 @@ describe('kickMailbox', () => {
       const { actor, mailbox } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
+        executeFn,
       })
       expect(mailbox.generation).toBe(0)
-      expect(mailbox.drain).toEqual({ kind: 'idle' })
+      expect(mailbox.drainKind).toBe('idle')
 
       const deliverAt = T0 + 1000
       await kickMailbox(ctx, { actorId: actor._id, deliverAt, executeFn })
@@ -57,12 +58,14 @@ describe('kickMailbox', () => {
       // Kick is not allowed to touch generation — that's the drain's
       // job. See SPEC §Drain generation and recovery.
       expect(after.generation).toBe(0)
-      assert(after.drain.kind === 'scheduled')
-      expect(after.drain.at).toBe(deliverAt)
+      assert(after.drainKind === 'scheduled')
+      expect(after.drainAt).toBe(deliverAt)
+      // executeFn persisted for recovery (Phase 5)
+      expect(after.executeFn).toBe(executeFn)
 
-      const scheduled = await ctx.db.system.get(after.drain.scheduledId)
-      expect(scheduled).not.toBeNull()
+      const scheduled = await ctx.db.system.get(after.drainScheduledId!)
       assert(scheduled)
+      assert('state' in scheduled)
       expect(scheduled.state.kind).toBe('pending')
       expect(scheduled.scheduledTime).toBe(deliverAt)
       // The scheduled drain carries the current generation value, not
@@ -84,6 +87,7 @@ describe('kickMailbox', () => {
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
+        executeFn,
       })
       // First kick schedules at T0 + 1000.
       await kickMailbox(ctx, {
@@ -92,8 +96,8 @@ describe('kickMailbox', () => {
         executeFn,
       })
       const before = (await getMailboxRow(ctx, actor._id))!
-      assert(before.drain.kind === 'scheduled')
-      const originalScheduledId = before.drain.scheduledId
+      assert(before.drainKind === 'scheduled')
+      const originalScheduledId = before.drainScheduledId
 
       // Second kick asks for a later delivery — existing schedule
       // already covers it, so nothing should change.
@@ -104,9 +108,9 @@ describe('kickMailbox', () => {
       })
       const after = (await getMailboxRow(ctx, actor._id))!
       expect(after.generation).toBe(before.generation)
-      assert(after.drain.kind === 'scheduled')
-      expect(after.drain.scheduledId).toBe(originalScheduledId)
-      expect(after.drain.at).toBe(T0 + 1000)
+      assert(after.drainKind === 'scheduled')
+      expect(after.drainScheduledId).toBe(originalScheduledId)
+      expect(after.drainAt).toBe(T0 + 1000)
 
       // Still exactly one pending scheduled function row.
       const allScheduled = await ctx.db.system
@@ -128,6 +132,7 @@ describe('kickMailbox', () => {
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
+        executeFn,
       })
       // Original schedule fires at (epsilon - 1ms) past T0; a kick to
       // T0 would only save (epsilon - 1)ms, just inside the no-op window.
@@ -138,8 +143,8 @@ describe('kickMailbox', () => {
         executeFn,
       })
       const before = (await getMailboxRow(ctx, actor._id))!
-      assert(before.drain.kind === 'scheduled')
-      const originalScheduledId = before.drain.scheduledId
+      assert(before.drainKind === 'scheduled')
+      const originalScheduledId = before.drainScheduledId
 
       await kickMailbox(ctx, {
         actorId: actor._id,
@@ -148,9 +153,9 @@ describe('kickMailbox', () => {
       })
 
       const after = (await getMailboxRow(ctx, actor._id))!
-      assert(after.drain.kind === 'scheduled')
-      expect(after.drain.scheduledId).toBe(originalScheduledId)
-      expect(after.drain.at).toBe(originalAt)
+      assert(after.drainKind === 'scheduled')
+      expect(after.drainScheduledId).toBe(originalScheduledId)
+      expect(after.drainAt).toBe(originalAt)
 
       // Still only one scheduled row — the first one, untouched.
       const allScheduled = await ctx.db.system
@@ -171,6 +176,7 @@ describe('kickMailbox', () => {
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
+        executeFn,
       })
       const originalAt = T0 + KICK_EPSILON_MS + 1
       await kickMailbox(ctx, {
@@ -179,8 +185,8 @@ describe('kickMailbox', () => {
         executeFn,
       })
       const before = (await getMailboxRow(ctx, actor._id))!
-      assert(before.drain.kind === 'scheduled')
-      const originalScheduledId = before.drain.scheduledId
+      assert(before.drainKind === 'scheduled')
+      const originalScheduledId = before.drainScheduledId
 
       await kickMailbox(ctx, {
         actorId: actor._id,
@@ -189,9 +195,9 @@ describe('kickMailbox', () => {
       })
 
       const after = (await getMailboxRow(ctx, actor._id))!
-      assert(after.drain.kind === 'scheduled')
-      expect(after.drain.scheduledId).not.toBe(originalScheduledId)
-      expect(after.drain.at).toBe(T0)
+      assert(after.drainKind === 'scheduled')
+      expect(after.drainScheduledId).not.toBe(originalScheduledId)
+      expect(after.drainAt).toBe(T0)
     })
   })
 
@@ -205,6 +211,7 @@ describe('kickMailbox', () => {
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
+        executeFn,
       })
 
       await kickMailbox(ctx, {
@@ -214,10 +221,10 @@ describe('kickMailbox', () => {
       })
 
       const after = (await getMailboxRow(ctx, actor._id))!
-      assert(after.drain.kind === 'scheduled')
-      expect(after.drain.at).toBe(T0) // clamped to now
-      const scheduled = await ctx.db.system.get(after.drain.scheduledId)
-      assert(scheduled)
+      assert(after.drainKind === 'scheduled')
+      expect(after.drainAt).toBe(T0) // clamped to now
+      const scheduled = await ctx.db.system.get(after.drainScheduledId!)
+      assert(scheduled && 'state' in scheduled)
       expect(scheduled.scheduledTime).toBe(T0)
     })
   })
@@ -229,6 +236,7 @@ describe('kickMailbox', () => {
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
+        executeFn,
       })
 
       await kickMailbox(ctx, {
@@ -238,8 +246,8 @@ describe('kickMailbox', () => {
       })
 
       const after = (await getMailboxRow(ctx, actor._id))!
-      assert(after.drain.kind === 'scheduled')
-      expect(after.drain.at).toBe(T0 + YEAR)
+      assert(after.drainKind === 'scheduled')
+      expect(after.drainAt).toBe(T0 + YEAR)
     })
   })
 
@@ -250,6 +258,7 @@ describe('kickMailbox', () => {
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
+        executeFn,
       })
       await kickMailbox(ctx, {
         actorId: actor._id,
@@ -257,8 +266,8 @@ describe('kickMailbox', () => {
         executeFn,
       })
       const before = (await getMailboxRow(ctx, actor._id))!
-      assert(before.drain.kind === 'scheduled')
-      const originalScheduledId = before.drain.scheduledId
+      assert(before.drainKind === 'scheduled')
+      const originalScheduledId = before.drainScheduledId
       expect(before.generation).toBe(0)
 
       await kickMailbox(ctx, {
@@ -274,16 +283,16 @@ describe('kickMailbox', () => {
       // whichever commits first bumps state to 1, the other retries
       // under OCC and fails its fence.
       expect(after.generation).toBe(0)
-      assert(after.drain.kind === 'scheduled')
-      expect(after.drain.at).toBe(T0 + 1000)
-      expect(after.drain.scheduledId).not.toBe(originalScheduledId)
+      assert(after.drainKind === 'scheduled')
+      expect(after.drainAt).toBe(T0 + 1000)
+      expect(after.drainScheduledId).not.toBe(originalScheduledId)
 
       // Old scheduled row was canceled, new one is pending.
-      const oldJob = await ctx.db.system.get(originalScheduledId)
-      assert(oldJob)
+      const oldJob = await ctx.db.system.get(originalScheduledId!)
+      assert(oldJob && 'state' in oldJob)
       expect(oldJob.state.kind).toBe('canceled')
-      const newJob = await ctx.db.system.get(after.drain.scheduledId)
-      assert(newJob)
+      const newJob = await ctx.db.system.get(after.drainScheduledId!)
+      assert(newJob && 'state' in newJob)
       expect(newJob.state.kind).toBe('pending')
       expect(newJob.scheduledTime).toBe(T0 + 1000)
       expect(newJob.args[0]).toEqual({
@@ -301,12 +310,14 @@ describe('kickMailbox', () => {
       const { actor, mailbox } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
+        executeFn,
       })
       // Force the mailbox into running state and bump generation to 42
       // so we can detect any accidental writes.
       await ctx.db.patch(mailbox._id, {
         generation: 42,
-        drain: { kind: 'running', startedAt: T0 },
+        drainKind: 'running',
+        drainStartedAt: T0,
       })
       const before = (await getMailboxRow(ctx, actor._id))!
 
@@ -335,6 +346,7 @@ describe('kickMailbox', () => {
       const { actor, mailbox } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
+        executeFn,
       })
 
       // Simulate a stale schedule: the previous scheduled drain has
@@ -356,11 +368,9 @@ describe('kickMailbox', () => {
       })
       await ctx.db.patch(mailbox._id, {
         generation: 1,
-        drain: {
-          kind: 'scheduled',
-          scheduledId: staleScheduledId,
-          at: T0 + 10_000,
-        },
+        drainKind: 'scheduled',
+        drainScheduledId: staleScheduledId,
+        drainAt: T0 + 10_000,
       })
 
       await kickMailbox(ctx, {
@@ -371,9 +381,9 @@ describe('kickMailbox', () => {
 
       const after = (await getMailboxRow(ctx, actor._id))!
       expect(after.generation).toBe(1)
-      assert(after.drain.kind === 'scheduled')
-      expect(after.drain.at).toBe(T0 + 1000)
-      expect(after.drain.scheduledId).not.toBe(staleScheduledId)
+      assert(after.drainKind === 'scheduled')
+      expect(after.drainAt).toBe(T0 + 1000)
+      expect(after.drainScheduledId).not.toBe(staleScheduledId)
 
       // Stale row was left alone (still 'success', not 'canceled').
       const staleJob = await ctx.db.system.get(staleScheduledId)
@@ -387,9 +397,11 @@ describe('kickMailbox', () => {
     // Bootstrap the actor in a first transaction so the concurrent
     // kicks below all operate on the same address.
     const { actorId } = await t.run(async (ctx) => {
+      const executeFn = await makeExecuteHandle()
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
+        executeFn,
       })
       return { actorId: actor._id }
     })
@@ -410,7 +422,7 @@ describe('kickMailbox', () => {
 
     await t.run(async (ctx) => {
       const mailbox = (await getMailboxRow(ctx, actorId))!
-      assert(mailbox.drain.kind === 'scheduled')
+      assert(mailbox.drainKind === 'scheduled')
       // Kick never writes generation, so it stays at the initial 0
       // regardless of how many kicks landed. The drain will bump it
       // once it actually runs.
@@ -423,7 +435,7 @@ describe('kickMailbox', () => {
         .collect()
       const pending = scheduled.filter((s) => s.state.kind === 'pending')
       expect(pending).toHaveLength(1)
-      expect(pending[0]._id).toBe(mailbox.drain.scheduledId)
+      expect(pending[0]._id).toBe(mailbox.drainScheduledId)
     })
   })
 })

@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
-import { vMailboxDrainState, vResponse } from './shared.js'
+import { vDrainKind, vResponse } from './shared.js'
 
 export default defineSchema({
   actor: defineTable({
@@ -17,8 +17,21 @@ export default defineSchema({
     // Bumped by every kick and by recovery. Drain bails if its arg no
     // longer matches, so stale drains become no-ops.
     generation: v.number(),
-    drain: vMailboxDrainState,
-  }).index('by_actor', ['actorId']),
+    // Drain-loop state machine (flat for indexability).
+    //   idle:      drainKind only; other drain fields absent.
+    //   scheduled: drainScheduledId + drainAt populated.
+    //   running:   drainStartedAt populated.
+    drainKind: vDrainKind,
+    drainScheduledId: v.optional(v.id('_scheduled_functions')),
+    drainAt: v.optional(v.number()),
+    drainStartedAt: v.optional(v.number()),
+    // App-level execute function handle, stored so recovery can
+    // reschedule the drain loop without an app-side caller.
+    // Optional: absent until the first kickMailbox call.
+    executeFn: v.string(),
+  })
+    .index('by_actor', ['actorId'])
+    .index('by_drainKind', ['drainKind']),
 
   messages: defineTable({
     actorId: v.id('actor'),

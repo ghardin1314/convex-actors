@@ -53,8 +53,8 @@ describe("enqueueMessageHandler", () => {
       const mailbox = await getMailboxRow(ctx, actor!._id);
       // Step 2.3: enqueue now kicks the mailbox, so post-send state is
       // `scheduled` (idle only holds until the first kick lands).
-      assert(mailbox?.drain.kind === "scheduled");
-      expect(mailbox.drain.at).toBe(T0);
+      assert(mailbox?.drainKind === "scheduled");
+      expect(mailbox.drainAt).toBe(T0);
 
       const messages = await ctx.db.query("messages").collect();
       expect(messages).toHaveLength(1);
@@ -364,8 +364,8 @@ describe("enqueueMessageHandler", () => {
 
       const actor = (await getActorRow(ctx, "counter", "a"))!;
       const mailbox = (await getMailboxRow(ctx, actor._id))!;
-      assert(mailbox.drain.kind === "scheduled");
-      expect(mailbox.drain.at).toBe(T0 + 500);
+      assert(mailbox.drainKind === "scheduled");
+      expect(mailbox.drainAt).toBe(T0 + 500);
 
       const scheduled = await ctx.db.system
         .query("_scheduled_functions")
@@ -397,8 +397,8 @@ describe("enqueueMessageHandler", () => {
 
       const actor = (await getActorRow(ctx, "counter", "a"))!;
       const before = (await getMailboxRow(ctx, actor._id))!;
-      assert(before.drain.kind === "scheduled");
-      const originalScheduledId = before.drain.scheduledId;
+      assert(before.drainKind === "scheduled");
+      const originalScheduledId = before.drainScheduledId;
 
       // Second send lands later — the existing schedule already
       // covers it, so kick should early-return without touching the
@@ -414,9 +414,9 @@ describe("enqueueMessageHandler", () => {
       ], executeFn);
 
       const after = (await getMailboxRow(ctx, actor._id))!;
-      assert(after.drain.kind === "scheduled");
-      expect(after.drain.scheduledId).toBe(originalScheduledId);
-      expect(after.drain.at).toBe(T0 + 1000);
+      assert(after.drainKind === "scheduled");
+      expect(after.drainScheduledId).toBe(originalScheduledId);
+      expect(after.drainAt).toBe(T0 + 1000);
 
       const scheduled = await ctx.db.system
         .query("_scheduled_functions")
@@ -462,11 +462,11 @@ describe("enqueueMessageHandler", () => {
 
       const mailboxA = (await getMailboxRow(ctx, a._id))!;
       const mailboxB = (await getMailboxRow(ctx, b._id))!;
-      assert(mailboxA.drain.kind === "scheduled");
-      assert(mailboxB.drain.kind === "scheduled");
+      assert(mailboxA.drainKind === "scheduled");
+      assert(mailboxB.drainKind === "scheduled");
       // Earliest deliverAt per target wins.
-      expect(mailboxA.drain.at).toBe(T0 + 500);
-      expect(mailboxB.drain.at).toBe(T0 + 2000);
+      expect(mailboxA.drainAt).toBe(T0 + 500);
+      expect(mailboxB.drainAt).toBe(T0 + 2000);
 
       const scheduled = await ctx.db.system
         .query("_scheduled_functions")

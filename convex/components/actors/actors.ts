@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
+import type { ExecuteFnHandle } from "./kick.js";
 
 /**
  * Row-level primitives for the `actor` table and its sibling
@@ -34,7 +35,7 @@ export async function getActorRow(
 /**
  * Idempotent lazy creation. On first call for a given `(actorType, name)`
  * this inserts the actor row and its paired `mailboxState` row
- * (`generation: 0`, `drain: { kind: "idle" }`). On subsequent calls it
+ * (`generation: 0`, `drainKind: "idle"`). On subsequent calls it
  * returns the existing rows untouched.
  *
  * The actor row is inserted with no `state` field. Populating initial
@@ -48,6 +49,7 @@ export async function getOrCreateActorRow(
   args: {
     actorType: string;
     name: string;
+    executeFn: ExecuteFnHandle;
   },
 ): Promise<{ actor: Doc<"actor">; mailbox: Doc<"mailboxState"> }> {
   const existing = await getActorRow(ctx, args.actorType, args.name);
@@ -71,7 +73,8 @@ export async function getOrCreateActorRow(
   const mailboxId = await ctx.db.insert("mailboxState", {
     actorId,
     generation: 0,
-    drain: { kind: "idle" },
+    drainKind: "idle",
+    executeFn: args.executeFn,
   });
   // Re-read so callers see the same `Doc<>` shape (with `_creationTime`)
   // the index lookup path returns.
@@ -121,7 +124,7 @@ export const getMailboxInfo = query({
     return {
       actorId: actor._id,
       generation: mailbox.generation,
-      drainKind: mailbox.drain.kind,
+      drainKind: mailbox.drainKind,
     };
   },
 });

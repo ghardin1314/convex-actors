@@ -10,16 +10,17 @@
 import { v } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { internal } from "./_generated/api.js";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
 import { getMailboxRow } from "./actors.js";
 import { enqueueMessageHandler } from "./enqueue.js";
 import type { ExecuteFnHandle } from "./kick.js";
-import {
-  MAX_ATTEMPTS,
-  now,
-  boundScheduledTime,
-  type MailboxDrainState,
-} from "./shared.js";
+import { MAX_ATTEMPTS, now, boundScheduledTime } from "./shared.js";
+
+/** Flat drain fields that get patched onto `mailboxState`. */
+type DrainPatch = Pick<
+  Doc<"mailboxState">,
+  "drainKind" | "drainScheduledId" | "drainAt" | "drainStartedAt"
+>;
 
 /**
  * After processing (or finding nothing to process), decide what's next
@@ -35,7 +36,7 @@ async function handleTransition(
   actorId: Id<"actor">,
   generation: number,
   executeFn: string,
-): Promise<MailboxDrainState> {
+): Promise<DrainPatch> {
   const t = now();
 
   const nextDeliverable = await ctx.db
@@ -51,7 +52,12 @@ async function handleTransition(
       generation,
       executeFn,
     });
-    return { kind: "running", startedAt: t };
+    return {
+      drainKind: "running",
+      drainStartedAt: t,
+      drainScheduledId: undefined,
+      drainAt: undefined,
+    };
   }
 
   const nextFuture = await ctx.db
@@ -66,10 +72,20 @@ async function handleTransition(
       internal.drain.drainLoop,
       { actorId, generation, executeFn },
     );
-    return { kind: "scheduled", scheduledId, at: deliverAt };
+    return {
+      drainKind: "scheduled",
+      drainScheduledId: scheduledId,
+      drainAt: deliverAt,
+      drainStartedAt: undefined,
+    };
   }
 
-  return { kind: "idle" };
+  return {
+    drainKind: "idle",
+    drainScheduledId: undefined,
+    drainAt: undefined,
+    drainStartedAt: undefined,
+  };
 }
 
 export const drainLoop = internalMutation({
@@ -96,7 +112,12 @@ export const drainLoop = internalMutation({
     }
 
     const generation = args.generation + 1;
-    let drain: MailboxDrainState = { kind: "running", startedAt: now() };
+    let drain: DrainPatch = {
+      drainKind: "running",
+      drainStartedAt: now(),
+      drainScheduledId: undefined,
+      drainAt: undefined,
+    };
 
     const actor = await ctx.db.get(args.actorId);
     if (!actor) throw new Error(`actor row ${args.actorId} missing`);
@@ -112,7 +133,7 @@ export const drainLoop = internalMutation({
 
     if (!pending) {
       drain = await handleTransition(ctx, args.actorId, generation, args.executeFn);
-      await ctx.db.patch(mailbox._id, { generation, drain });
+      await ctx.db.patch(mailbox._id, { generation, ...drain });
       return null;
     }
 
@@ -136,7 +157,7 @@ export const drainLoop = internalMutation({
       });
       await ctx.db.delete(pending._id);
       drain = await handleTransition(ctx, args.actorId, generation, args.executeFn);
-      await ctx.db.patch(mailbox._id, { generation, drain });
+      await ctx.db.patch(mailbox._id, { generation, ...drain });
       return null;
     }
 
@@ -201,7 +222,7 @@ export const drainLoop = internalMutation({
 
     // ── Transition + single mailbox write ───────────────────
     drain = await handleTransition(ctx, args.actorId, generation, args.executeFn);
-    await ctx.db.patch(mailbox._id, { generation, drain });
+    await ctx.db.patch(mailbox._id, { generation, ...drain });
     return null;
   },
 });

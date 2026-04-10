@@ -52,29 +52,27 @@ export async function kickMailbox(
     )
   }
 
-  const drain = mailbox.drain
-
-  if (drain.kind === 'running') {
+  if (mailbox.drainKind === 'running') {
     return
   }
 
   const deliverAt = boundScheduledTime(args.deliverAt)
 
-  if (drain.kind === 'scheduled') {
-    if (drain.at <= deliverAt + KICK_EPSILON_MS) {
+  if (mailbox.drainKind === 'scheduled') {
+    if (mailbox.drainAt! <= deliverAt + KICK_EPSILON_MS) {
       return
     }
-    const scheduled = await ctx.db.system.get(drain.scheduledId)
+    const scheduled = await ctx.db.system.get(mailbox.drainScheduledId!)
     if (scheduled === null) {
       console.warn(
-        `[kick] actor ${args.actorId} scheduledId ${drain.scheduledId} not found — stale pointer`,
+        `[kick] actor ${args.actorId} scheduledId ${mailbox.drainScheduledId} not found — stale pointer`,
       )
     } else if (scheduled.state.kind !== 'pending') {
       console.warn(
-        `[kick] actor ${args.actorId} scheduledId ${drain.scheduledId} in state '${scheduled.state.kind}' — skipping cancel`,
+        `[kick] actor ${args.actorId} scheduledId ${mailbox.drainScheduledId} in state '${scheduled.state.kind}' — skipping cancel`,
       )
     } else {
-      await ctx.scheduler.cancel(drain.scheduledId)
+      await ctx.scheduler.cancel(mailbox.drainScheduledId!)
     }
   }
 
@@ -88,6 +86,10 @@ export async function kickMailbox(
     },
   )
   await ctx.db.patch(mailbox._id, {
-    drain: { kind: 'scheduled', scheduledId, at: deliverAt },
+    drainKind: 'scheduled',
+    drainScheduledId: scheduledId,
+    drainAt: deliverAt,
+    drainStartedAt: undefined,
+    executeFn: args.executeFn,
   })
 }
