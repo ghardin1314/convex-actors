@@ -54,7 +54,17 @@ export interface ActorDefinition<
 export interface ActorHandlerCtx {
   self(): { type: string; name: string };
   now(): number;
-  // stub / sendSelf / fail land in Step 4.1
+  // Full surface lives in `ctx.ts` as `ActorCtx` (which is a structural
+  // supertype of this interface). Handlers receive `ActorCtx` at runtime;
+  // this minimal interface avoids a circular import between defineActor
+  // and ctx (ctx imports AnyActorDefinition from here). Handlers that
+  // need `stub`, `sendSelf`, or `fail` can narrow to `ActorCtx` via
+  // import or just use the methods — structural typing makes it work.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  stub: (def: any, name: string) => any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sendSelf: (msgType: string, payload: any, opts?: any) => void;
+  fail: (reason: string, details?: unknown) => never;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

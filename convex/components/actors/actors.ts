@@ -1,5 +1,6 @@
+import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import type { MutationCtx, QueryCtx } from "./_generated/server.js";
+import { query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
 
 /**
  * Row-level primitives for the `actor` table and its sibling
@@ -92,3 +93,48 @@ export async function getMailboxRow(
     .withIndex("by_actor", (q) => q.eq("actorId", actorId))
     .unique();
 }
+
+/**
+ * Registered query so the app-level `peek` factory can read actor state
+ * via `ctx.runQuery(component.actors.getActorState, ...)`. Returns the
+ * raw `state` field (which is `v.optional(v.any())` on the schema) or
+ * `null` if the actor has never been addressed.
+ *
+ * The app-level `peek` runs `definition.project(state)` in-process on
+ * the returned value — the component has no knowledge of projection
+ * functions.
+ */
+/**
+ * Returns the actorId, current mailbox generation, and drain kind for
+ * a given `(actorType, name)`. Used by the app-level drain test helper
+ * `drainUntilIdle` which needs to know whether to keep draining and
+ * what generation to pass. Returns `null` if the actor doesn't exist.
+ */
+export const getMailboxInfo = query({
+  args: { actorType: v.string(), name: v.string() },
+  returns: v.any(),
+  handler: async (ctx, { actorType, name }) => {
+    const actor = await getActorRow(ctx, actorType, name);
+    if (!actor) return null;
+    const mailbox = await getMailboxRow(ctx, actor._id);
+    if (!mailbox) return null;
+    return {
+      actorId: actor._id,
+      generation: mailbox.generation,
+      drainKind: mailbox.drain.kind,
+    };
+  },
+});
+
+export const getActorState = query({
+  args: { actorType: v.string(), name: v.string() },
+  returns: v.any(),
+  handler: async (ctx, { actorType, name }) => {
+    const actor = await getActorRow(ctx, actorType, name);
+    if (actor === null) return null;
+    // `state` is `v.optional(v.any())` — absent until the drain loop
+    // processes the first message. Return `null` to signal "no state
+    // yet" uniformly with "actor doesn't exist".
+    return actor.state ?? null;
+  },
+});

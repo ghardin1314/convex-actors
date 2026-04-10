@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as actors from "../actors.js";
 import type * as myFunctions from "../myFunctions.js";
 
 import type {
@@ -17,6 +18,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  actors: typeof actors;
   myFunctions: typeof myFunctions;
 }>;
 
@@ -48,12 +50,25 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   actors: {
+    actors: {
+      getActorState: FunctionReference<
+        "query",
+        "internal",
+        { actorType: string; name: string },
+        any
+      >;
+      getMailboxInfo: FunctionReference<
+        "query",
+        "internal",
+        { actorType: string; name: string },
+        any
+      >;
+    };
     enqueue: {
       enqueueMessage: FunctionReference<
         "mutation",
         "internal",
         {
-          drainFn: string;
           effects: Array<{
             actorType: string;
             deliverAt: number;
@@ -61,8 +76,23 @@ export declare const components: {
             name: string;
             payload: any;
           }>;
+          executeFn: string;
         },
         Array<string>
+      >;
+    };
+    responses: {
+      getResponseRow: FunctionReference<
+        "query",
+        "internal",
+        { messageId: string },
+        {
+          messageId: string;
+          response:
+            | { kind: "success"; value: any }
+            | { details?: any; kind: "fail"; reason: string }
+            | { attempts: number; error: string; kind: "defect" };
+        } | null
       >;
     };
   };

@@ -4,7 +4,7 @@ import { createFunctionHandle } from 'convex/server'
 import { afterEach, assert, beforeEach, describe, expect, test, vi } from 'vitest'
 import { getOrCreateActorRow, getMailboxRow } from './actors.js'
 import { api } from './_generated/api.js'
-import { kickMailbox, type DrainFnHandle } from './kick.js'
+import { kickMailbox } from './kick.js'
 import schema from './schema.js'
 import { KICK_EPSILON_MS, YEAR } from './shared.js'
 
@@ -31,21 +31,18 @@ afterEach(() => {
  * `createFunctionHandle(api.kick.kickMailbox)` only to get a
  * parseable handle — the target function is irrelevant.
  */
-async function makeDrainHandle(): Promise<DrainFnHandle> {
-  // Cast: api.kick.kickMailbox is not really a registered mutation,
-  // but convex-test's scheduler only parses the handle string — it
-  // never looks up the target unless the scheduled callback fires.
+async function makeExecuteHandle() {
   return (await createFunctionHandle(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (api as any).kick.kickMailbox,
-  )) as unknown as DrainFnHandle
+  )) as unknown as import("./kick.js").ExecuteFnHandle
 }
 
 describe('kickMailbox', () => {
   test('idle → scheduled: schedules at deliverAt, generation untouched', async () => {
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle()
+      const executeFn = await makeExecuteHandle()
       const { actor, mailbox } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
@@ -54,7 +51,7 @@ describe('kickMailbox', () => {
       expect(mailbox.drain).toEqual({ kind: 'idle' })
 
       const deliverAt = T0 + 1000
-      await kickMailbox(ctx, { actorId: actor._id, deliverAt, drainFn })
+      await kickMailbox(ctx, { actorId: actor._id, deliverAt, executeFn })
 
       const after = (await getMailboxRow(ctx, actor._id))!
       // Kick is not allowed to touch generation — that's the drain's
@@ -69,10 +66,13 @@ describe('kickMailbox', () => {
       expect(scheduled.state.kind).toBe('pending')
       expect(scheduled.scheduledTime).toBe(deliverAt)
       // The scheduled drain carries the current generation value, not
-      // a bumped one — fencing happens on the drain side.
+      // a bumped one — fencing happens on the drain side. It also
+      // carries its own `executeFn` so step-8 self-reschedule can forward
+      // the handle without re-creating it.
       expect(scheduled.args[0]).toEqual({
         actorId: actor._id,
         generation: 0,
+        executeFn,
       })
     })
   })
@@ -80,7 +80,7 @@ describe('kickMailbox', () => {
   test('scheduled with later kick is a no-op', async () => {
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle()
+      const executeFn = await makeExecuteHandle()
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
@@ -89,7 +89,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: T0 + 1000,
-        drainFn,
+        executeFn,
       })
       const before = (await getMailboxRow(ctx, actor._id))!
       assert(before.drain.kind === 'scheduled')
@@ -100,7 +100,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: T0 + 5000,
-        drainFn,
+        executeFn,
       })
       const after = (await getMailboxRow(ctx, actor._id))!
       expect(after.generation).toBe(before.generation)
@@ -124,7 +124,7 @@ describe('kickMailbox', () => {
     // test tracks the constant instead of baking in "800ms".
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle()
+      const executeFn = await makeExecuteHandle()
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
@@ -135,7 +135,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: originalAt,
-        drainFn,
+        executeFn,
       })
       const before = (await getMailboxRow(ctx, actor._id))!
       assert(before.drain.kind === 'scheduled')
@@ -144,7 +144,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: T0,
-        drainFn,
+        executeFn,
       })
 
       const after = (await getMailboxRow(ctx, actor._id))!
@@ -167,7 +167,7 @@ describe('kickMailbox', () => {
     // Pair of tests pins the boundary exactly.
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle()
+      const executeFn = await makeExecuteHandle()
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
@@ -176,7 +176,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: originalAt,
-        drainFn,
+        executeFn,
       })
       const before = (await getMailboxRow(ctx, actor._id))!
       assert(before.drain.kind === 'scheduled')
@@ -185,7 +185,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: T0,
-        drainFn,
+        executeFn,
       })
 
       const after = (await getMailboxRow(ctx, actor._id))!
@@ -201,7 +201,7 @@ describe('kickMailbox', () => {
     // bogus timestamp to confuse follow-up no-op comparisons.
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle()
+      const executeFn = await makeExecuteHandle()
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
@@ -210,7 +210,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: T0 - 2 * YEAR, // wildly in the past
-        drainFn,
+        executeFn,
       })
 
       const after = (await getMailboxRow(ctx, actor._id))!
@@ -225,7 +225,7 @@ describe('kickMailbox', () => {
   test('deliverAt far in the future is clamped to one year out', async () => {
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle()
+      const executeFn = await makeExecuteHandle()
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
@@ -234,7 +234,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: T0 + 10 * YEAR, // absurdly far future
-        drainFn,
+        executeFn,
       })
 
       const after = (await getMailboxRow(ctx, actor._id))!
@@ -246,7 +246,7 @@ describe('kickMailbox', () => {
   test('scheduled with earlier kick cancels and reschedules', async () => {
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle()
+      const executeFn = await makeExecuteHandle()
       const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
@@ -254,7 +254,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: T0 + 5000,
-        drainFn,
+        executeFn,
       })
       const before = (await getMailboxRow(ctx, actor._id))!
       assert(before.drain.kind === 'scheduled')
@@ -264,7 +264,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: T0 + 1000,
-        drainFn,
+        executeFn,
       })
 
       const after = (await getMailboxRow(ctx, actor._id))!
@@ -286,14 +286,18 @@ describe('kickMailbox', () => {
       assert(newJob)
       expect(newJob.state.kind).toBe('pending')
       expect(newJob.scheduledTime).toBe(T0 + 1000)
-      expect(newJob.args[0]).toEqual({ actorId: actor._id, generation: 0 })
+      expect(newJob.args[0]).toEqual({
+        actorId: actor._id,
+        generation: 0,
+        executeFn,
+      })
     })
   })
 
   test('running mailbox is untouched', async () => {
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle()
+      const executeFn = await makeExecuteHandle()
       const { actor, mailbox } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
@@ -309,7 +313,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: T0 + 1000,
-        drainFn,
+        executeFn,
       })
 
       const after = (await getMailboxRow(ctx, actor._id))!
@@ -327,7 +331,7 @@ describe('kickMailbox', () => {
   test('stale scheduledId skips cancel but still reschedules', async () => {
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle()
+      const executeFn = await makeExecuteHandle()
       const { actor, mailbox } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
@@ -339,8 +343,9 @@ describe('kickMailbox', () => {
       // (system.get shows non-pending) and still schedule a new one.
       const staleScheduledId = await ctx.scheduler.runAt(
         T0 + 10_000,
-        drainFn,
-        { actorId: actor._id, generation: 1 },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        executeFn as any,
+        { actorId: actor._id, generation: 1, executeFn },
       )
       // Manually mark it as success — convex-test lets us patch the
       // system table directly, which matches the post-run state of a
@@ -361,7 +366,7 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, {
         actorId: actor._id,
         deliverAt: T0 + 1000,
-        drainFn,
+        executeFn,
       })
 
       const after = (await getMailboxRow(ctx, actor._id))!
@@ -393,11 +398,11 @@ describe('kickMailbox', () => {
     await Promise.all(
       Array.from({ length: 10 }, (_, i) =>
         t.run(async (ctx) => {
-          const drainFn = await makeDrainHandle()
+          const executeFn = await makeExecuteHandle()
           await kickMailbox(ctx, {
             actorId,
             deliverAt: T0 + 1000 + i * 100,
-            drainFn,
+            executeFn,
           })
         }),
       ),

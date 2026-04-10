@@ -2,7 +2,7 @@ import { v } from 'convex/values'
 import type { Id } from './_generated/dataModel.js'
 import { mutation, type MutationCtx } from './_generated/server.js'
 import { getOrCreateActorRow } from './actors.js'
-import { kickMailbox, type DrainFnHandle } from './kick.js'
+import { kickMailbox, type ExecuteFnHandle } from './kick.js'
 import { now } from './shared.js'
 
 /**
@@ -22,12 +22,12 @@ export const vEffect = v.object({
 const vEnqueueArgs = {
   effects: v.array(vEffect),
   // `FunctionHandle` serializes as a branded string; we accept it as
-  // `v.string()` at the validator boundary and narrow to `DrainFnHandle`
+  // `v.string()` at the validator boundary and narrow to `string`
   // at the type level inside the handler. The component has no static
   // reference to the app-level `drain` — callers produce the handle via
   // `createFunctionHandle(...)` and pass it on every send so a redeploy
   // that renames the drain function can't leave stale handles around.
-  drainFn: v.string(),
+  executeFn: v.string(),
 }
 
 /**
@@ -52,11 +52,11 @@ const vEnqueueArgs = {
 export const enqueueMessage = mutation({
   args: vEnqueueArgs,
   returns: v.array(v.id('messages')),
-  handler: async (ctx, { effects, drainFn }) => {
+  handler: async (ctx, { effects, executeFn }) => {
     return await enqueueMessageHandler(
       ctx,
       effects,
-      drainFn as DrainFnHandle,
+      executeFn as ExecuteFnHandle,
     )
   },
 })
@@ -70,7 +70,7 @@ export async function enqueueMessageHandler(
     payload: unknown
     deliverAt: number
   }>,
-  drainFn: DrainFnHandle,
+  executeFn: ExecuteFnHandle,
 ): Promise<Array<Id<'messages'>>> {
   const sentAt = now()
   const messageIds: Array<Id<'messages'>> = []
@@ -133,7 +133,7 @@ export async function enqueueMessageHandler(
   // writes) and would only obscure the order of `_scheduled_functions`
   // rows that tests inspect.
   for (const [actorId, deliverAt] of earliestByActor) {
-    await kickMailbox(ctx, { actorId, deliverAt, drainFn })
+    await kickMailbox(ctx, { actorId, deliverAt, executeFn })
   }
 
   return messageIds

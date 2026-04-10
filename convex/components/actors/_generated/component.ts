@@ -23,12 +23,27 @@ import type { FunctionReference } from "convex/server";
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
+    actors: {
+      getActorState: FunctionReference<
+        "query",
+        "internal",
+        { actorType: string; name: string },
+        any,
+        Name
+      >;
+      getMailboxInfo: FunctionReference<
+        "query",
+        "internal",
+        { actorType: string; name: string },
+        any,
+        Name
+      >;
+    };
     enqueue: {
       enqueueMessage: FunctionReference<
         "mutation",
         "internal",
         {
-          drainFn: string;
           effects: Array<{
             actorType: string;
             deliverAt: number;
@@ -36,8 +51,24 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             name: string;
             payload: any;
           }>;
+          executeFn: string;
         },
         Array<string>,
+        Name
+      >;
+    };
+    responses: {
+      getResponseRow: FunctionReference<
+        "query",
+        "internal",
+        { messageId: string },
+        {
+          messageId: string;
+          response:
+            | { kind: "success"; value: any }
+            | { details?: any; kind: "fail"; reason: string }
+            | { attempts: number; error: string; kind: "defect" };
+        } | null,
         Name
       >;
     };

@@ -5,7 +5,6 @@ import { assert, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api.js";
 import { enqueueMessageHandler } from "./enqueue.js";
 import { getActorRow, getMailboxRow } from "./actors.js";
-import { type DrainFnHandle } from "./kick.js";
 import schema from "./schema.js";
 
 /**
@@ -14,11 +13,11 @@ import schema from "./schema.js";
  * to be a parseable `function://...` string since fake timers keep the
  * scheduled callback from ever running.
  */
-async function makeDrainHandle(): Promise<DrainFnHandle> {
+async function makeExecuteHandle() {
   return (await createFunctionHandle(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (api as any).kick.kickMailbox,
-  )) as unknown as DrainFnHandle;
+  )) as unknown as import("./kick.js").ExecuteFnHandle;
 }
 
 const modules = import.meta.glob("./**/*.ts");
@@ -36,7 +35,7 @@ describe("enqueueMessageHandler", () => {
   test("first effect to new (type, name) creates actor + mailbox + message + pending rows", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle();
+      const executeFn = await makeExecuteHandle();
       const ids = await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
@@ -45,7 +44,7 @@ describe("enqueueMessageHandler", () => {
           payload: { by: 1 },
           deliverAt: T0,
         },
-      ], drainFn);
+      ], executeFn);
 
       expect(ids).toHaveLength(1);
 
@@ -83,7 +82,7 @@ describe("enqueueMessageHandler", () => {
   test("second effect to same address reuses the actor row", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle();
+      const executeFn = await makeExecuteHandle();
       await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
@@ -92,7 +91,7 @@ describe("enqueueMessageHandler", () => {
           payload: null,
           deliverAt: T0,
         },
-      ], drainFn);
+      ], executeFn);
       await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
@@ -101,7 +100,7 @@ describe("enqueueMessageHandler", () => {
           payload: null,
           deliverAt: T0 + 1000,
         },
-      ], drainFn);
+      ], executeFn);
 
       const actors = await ctx.db.query("actor").collect();
       expect(actors).toHaveLength(1);
@@ -117,7 +116,7 @@ describe("enqueueMessageHandler", () => {
   test("batch of N effects writes N messages + N pending with sendSeq 0..N-1", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle();
+      const executeFn = await makeExecuteHandle();
       const ids = await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
@@ -140,7 +139,7 @@ describe("enqueueMessageHandler", () => {
           payload: { by: 3 },
           deliverAt: T0,
         },
-      ], drainFn);
+      ], executeFn);
 
       expect(ids).toHaveLength(3);
       const actor = (await getActorRow(ctx, "counter", "a"))!;
@@ -164,7 +163,7 @@ describe("enqueueMessageHandler", () => {
   test("batch with multiple targets lazy-creates each distinct actor once", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle();
+      const executeFn = await makeExecuteHandle();
       await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
@@ -187,7 +186,7 @@ describe("enqueueMessageHandler", () => {
           payload: null,
           deliverAt: T0,
         },
-      ], drainFn);
+      ], executeFn);
 
       const actors = await ctx.db.query("actor").collect();
       expect(actors).toHaveLength(2);
@@ -218,7 +217,7 @@ describe("enqueueMessageHandler", () => {
     // interleaving is not preserved.
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle();
+      const executeFn = await makeExecuteHandle();
       await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
@@ -255,7 +254,7 @@ describe("enqueueMessageHandler", () => {
           payload: { marker: 4 },
           deliverAt: T0,
         },
-      ], drainFn);
+      ], executeFn);
 
       const a = (await getActorRow(ctx, "counter", "a"))!;
       const b = (await getActorRow(ctx, "counter", "b"))!;
@@ -281,7 +280,7 @@ describe("enqueueMessageHandler", () => {
   test("by_actor_deliverable index returns rows in (deliverAt, sendSeq) order", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle();
+      const executeFn = await makeExecuteHandle();
       // Out-of-order deliverAts within a single call. sendSeq breaks ties.
       await enqueueMessageHandler(ctx, [
         {
@@ -312,7 +311,7 @@ describe("enqueueMessageHandler", () => {
           payload: { i: 3 },
           deliverAt: T0 + 500,
         },
-      ], drainFn);
+      ], executeFn);
 
       const actor = (await getActorRow(ctx, "counter", "a"))!;
       const pending = await ctx.db
@@ -336,7 +335,7 @@ describe("enqueueMessageHandler", () => {
   test("send from idle kicks a drain at the earliest deliverAt in the batch", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle();
+      const executeFn = await makeExecuteHandle();
       // Mixed deliverAts — earliest is T0 + 500. Kick should schedule
       // there, not at the first effect's deliverAt (T0 + 2000).
       await enqueueMessageHandler(ctx, [
@@ -361,7 +360,7 @@ describe("enqueueMessageHandler", () => {
           payload: null,
           deliverAt: T0 + 1500,
         },
-      ], drainFn);
+      ], executeFn);
 
       const actor = (await getActorRow(ctx, "counter", "a"))!;
       const mailbox = (await getMailboxRow(ctx, actor._id))!;
@@ -377,6 +376,7 @@ describe("enqueueMessageHandler", () => {
       expect(scheduled[0].args[0]).toEqual({
         actorId: actor._id,
         generation: 0,
+        executeFn,
       });
     });
   });
@@ -384,7 +384,7 @@ describe("enqueueMessageHandler", () => {
   test("second send at a later deliverAt with drain already scheduled is a no-op on the scheduler", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle();
+      const executeFn = await makeExecuteHandle();
       await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
@@ -393,7 +393,7 @@ describe("enqueueMessageHandler", () => {
           payload: null,
           deliverAt: T0 + 1000,
         },
-      ], drainFn);
+      ], executeFn);
 
       const actor = (await getActorRow(ctx, "counter", "a"))!;
       const before = (await getMailboxRow(ctx, actor._id))!;
@@ -411,7 +411,7 @@ describe("enqueueMessageHandler", () => {
           payload: null,
           deliverAt: T0 + 10_000,
         },
-      ], drainFn);
+      ], executeFn);
 
       const after = (await getMailboxRow(ctx, actor._id))!;
       assert(after.drain.kind === "scheduled");
@@ -432,7 +432,7 @@ describe("enqueueMessageHandler", () => {
     // duplicate scheduler rows.
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
-      const drainFn = await makeDrainHandle();
+      const executeFn = await makeExecuteHandle();
       await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
@@ -455,7 +455,7 @@ describe("enqueueMessageHandler", () => {
           payload: null,
           deliverAt: T0 + 500, // earliest for "a"
         },
-      ], drainFn);
+      ], executeFn);
 
       const a = (await getActorRow(ctx, "counter", "a"))!;
       const b = (await getActorRow(ctx, "counter", "b"))!;
