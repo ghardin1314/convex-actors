@@ -24,13 +24,15 @@ export const send = mutation({
   },
   returns: v.string(),
   handler: async (ctx, args): Promise<string> => {
-    return await system.send(ctx, internal.actors.execute, {
-      actorType: args.actorType,
-      name: args.name,
-      msgType: args.msgType,
-      payload: args.payload,
-      opts: args.opts,
-    });
+    return await system.sendRaw(
+      ctx,
+      internal.actors.execute,
+      args.actorType,
+      args.name,
+      args.msgType,
+      args.payload,
+      args.opts,
+    );
   },
 });
 
@@ -40,7 +42,7 @@ export const peek = query({
     name: v.string(),
   },
   handler: async (ctx, args) => {
-    return await system.peek(ctx, args);
+    return await system.peekRaw(ctx, args.actorType, args.name);
   },
 });
 

@@ -63,7 +63,7 @@ describe("defineActor", () => {
   });
 
   test("exposes the state + payload validators at runtime", () => {
-    // payload validators are reachable for enqueue-time validation
+    // payload validators are reachable at runtime (used for type inference only)
     expect(Object.keys(chatRoom.messages).sort()).toEqual([
       "join",
       "leave",

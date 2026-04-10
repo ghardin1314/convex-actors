@@ -5,7 +5,12 @@ import {
   type OptionalRestArgs,
 } from "convex/server";
 import type { ComponentApi } from "../_generated/component";
-import type { AnyActorDefinition } from "./defineActor";
+import type {
+  AnyActorDefinition,
+  MessageNamesOf,
+  ProjectionOf,
+} from "./defineActor";
+import type { Infer } from "convex/values";
 
 export type RunQueryCtx = {
   runQuery: <Query extends FunctionReference<"query", "public" | "internal">>(
@@ -107,34 +112,63 @@ export class ActorSystem<
   }
 
   /**
-   * Send a message to an actor. Validates actorType and msgType against
-   * registered definitions, then enqueues via the component.
+   * Send a typed message to an actor. The definition object provides
+   * compile-time checking of message name and payload shape.
    */
-  async send(
+  async send<D extends AnyActorDefinition, M extends MessageNamesOf<D>>(
     ctx: RunMutationCtx,
     executeRef: ExecuteRef,
-    args: {
-      actorType: string;
-      name: string;
-      msgType: string;
-      payload: unknown;
-      opts?: { at?: number; after?: number };
-    },
+    def: D,
+    name: string,
+    msgType: M,
+    payload: Infer<D["messages"][M]>,
+    opts?: { at?: number; after?: number },
   ): Promise<string> {
-    if (!this.hasDefinition(args.actorType)) {
+    return this.sendRaw(
+      ctx, executeRef, def.type, name, msgType as string, payload, opts,
+    );
+  }
+
+  /**
+   * Read an actor's projected public view. Returns `null` when the
+   * actor doesn't exist or has no state yet.
+   */
+  async peek<D extends AnyActorDefinition>(
+    ctx: RunQueryCtx,
+    def: D,
+    name: string,
+  ): Promise<ProjectionOf<D> | null> {
+    return this.peekRaw(ctx, def.type, name) as Promise<ProjectionOf<D> | null>;
+  }
+
+  /**
+   * Untyped send for the Convex mutation boundary where actorType and
+   * msgType arrive as plain strings. Validates actorType and msgType
+   * at runtime; payload shape is not validated (message validators are
+   * only used for compile-time type inference).
+   */
+  async sendRaw(
+    ctx: RunMutationCtx,
+    executeRef: ExecuteRef,
+    actorType: string,
+    name: string,
+    msgType: string,
+    payload: unknown,
+    opts?: { at?: number; after?: number },
+  ): Promise<string> {
+    if (!this.hasDefinition(actorType)) {
       throw new Error(
-        `send: unknown actor type "${args.actorType}" (registered: ${[
+        `send: unknown actor type "${actorType}" (registered: ${[
           ...this.allDefinitions(),
         ]
           .map((d) => `"${d.type}"`)
           .join(", ") || "<none>"})`,
       );
     }
-    const def = this.getDefinition(args.actorType);
-
-    if (!(args.msgType in def.messages)) {
+    const def = this.getDefinition(actorType);
+    if (!(msgType in def.messages)) {
       throw new Error(
-        `send: unknown msgType "${args.msgType}" for actor type "${args.actorType}" (valid: ${Object.keys(
+        `send: unknown msgType "${msgType}" for actor type "${actorType}" (valid: ${Object.keys(
           def.messages,
         )
           .map((k) => `"${k}"`)
@@ -144,10 +178,10 @@ export class ActorSystem<
 
     const now = Date.now();
     let deliverAt: number;
-    if (args.opts?.at !== undefined) {
-      deliverAt = args.opts.at;
-    } else if (args.opts?.after !== undefined) {
-      deliverAt = now + args.opts.after;
+    if (opts?.at !== undefined) {
+      deliverAt = opts.at;
+    } else if (opts?.after !== undefined) {
+      deliverAt = now + opts.after;
     } else {
       deliverAt = now;
     }
@@ -159,13 +193,7 @@ export class ActorSystem<
       this.component.enqueue.enqueueMessage,
       {
         effects: [
-          {
-            actorType: args.actorType,
-            name: args.name,
-            msgType: args.msgType,
-            payload: args.payload,
-            deliverAt,
-          },
+          { actorType, name, msgType, payload, deliverAt },
         ],
         executeFn,
       },
@@ -175,28 +203,28 @@ export class ActorSystem<
   }
 
   /**
-   * Read an actor's projected public view. Returns `null` when the
-   * actor doesn't exist, has no state yet, or has no `project` function.
+   * Untyped peek for the Convex query boundary.
    */
-  async peek(
+  async peekRaw(
     ctx: RunQueryCtx,
-    args: { actorType: string; name: string },
+    actorType: string,
+    name: string,
   ): Promise<unknown> {
-    if (!this.hasDefinition(args.actorType)) {
+    if (!this.hasDefinition(actorType)) {
       throw new Error(
-        `peek: unknown actor type "${args.actorType}" (registered: ${[
+        `peek: unknown actor type "${actorType}" (registered: ${[
           ...this.allDefinitions(),
         ]
           .map((d) => `"${d.type}"`)
           .join(", ") || "<none>"})`,
       );
     }
-    const def = this.getDefinition(args.actorType);
+    const def = this.getDefinition(actorType);
     if (!def.project) return null;
 
     const state = await ctx.runQuery(
       this.component.actors.getActorState,
-      { actorType: args.actorType, name: args.name },
+      { actorType, name },
     );
     if (state === null || state === undefined) return null;
     return def.project(state);

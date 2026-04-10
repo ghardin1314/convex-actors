@@ -6,14 +6,9 @@ import type { Infer, Validator } from "convex/values";
  * and infer the state / payload / projection types from the attached
  * validators and `project` return type.
  *
- * See SPEC §Defining actors for semantics (initialState, project as the
- * public surface, handler wrapping in Immer, payload validation timing).
- *
- * The `ActorCtx` parameter on each handler is currently typed as an
- * opaque placeholder that will be fleshed out in Step 4.1 (`ctx.ts`).
- * Handlers receive the full narrow surface described in SPEC §Handler
- * ctx at runtime — this type just keeps them from reaching into
- * anything that isn't on that surface.
+ * Handler ctx is typed as `ActorHandlerCtx<Self>` where Self is the
+ * actor's own definition, giving handlers full type safety for
+ * `sendSelf`, `stub`, and `fail`.
  */
 export interface ActorDefinition<
   Type extends string = string,
@@ -39,32 +34,47 @@ export interface ActorDefinition<
     [K in keyof Msgs]: (
       state: Infer<StateV>,
       payload: Infer<Msgs[K]>,
-      ctx: ActorHandlerCtx,
+      ctx: ActorHandlerCtx<ActorDefinition<Type, StateV, Msgs, Projection>>,
     ) => Promise<unknown>;
   };
 }
 
 /**
- * Structural placeholder for the full `ActorCtx` built in Step 4.1.
- * Declared here so `ActorDefinition` can reference it without a circular
- * import. Step 4.1 will export a richer `ActorCtx<SelfDef>` from
- * `ctx.ts`; consumers that want the full surface should import from
- * there once it exists.
+ * Typed handler context. Generic over `Self` (the actor's own definition)
+ * so that `sendSelf` knows the actor's message names and payloads, and
+ * `stub` accepts any actor definition and returns a typed stub.
+ *
+ * Defined here (not in ctx.ts) to avoid a circular import: ctx.ts imports
+ * `AnyActorDefinition` from this file.
  */
-export interface ActorHandlerCtx {
+export interface ActorHandlerCtx<
+  Self extends AnyActorDefinition = AnyActorDefinition,
+> {
   self(): { type: string; name: string };
   now(): number;
-  // Full surface lives in `ctx.ts` as `ActorCtx` (which is a structural
-  // supertype of this interface). Handlers receive `ActorCtx` at runtime;
-  // this minimal interface avoids a circular import between defineActor
-  // and ctx (ctx imports AnyActorDefinition from here). Handlers that
-  // need `stub`, `sendSelf`, or `fail` can narrow to `ActorCtx` via
-  // import or just use the methods — structural typing makes it work.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  stub: (def: any, name: string) => any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  sendSelf: (msgType: string, payload: any, opts?: any) => void;
-  fail: (reason: string, details?: unknown) => never;
+  stub<D extends AnyActorDefinition>(
+    def: D,
+    name: string,
+  ): ActorStub<D>;
+  sendSelf<M extends MessageNamesOf<Self>>(
+    msgType: M,
+    payload: Infer<Self["messages"][M]>,
+    opts?: { at?: number; after?: number },
+  ): void;
+  fail(reason: string, details?: unknown): never;
+}
+
+/**
+ * Typed stub handle returned by `ctx.stub(def, name)`. Defined here so
+ * `ActorHandlerCtx` can reference it without importing from ctx.ts.
+ */
+export interface ActorStub<D extends AnyActorDefinition> {
+  send<M extends MessageNamesOf<D>>(
+    msgType: M,
+    payload: Infer<D["messages"][M]>,
+    opts?: { at?: number; after?: number },
+  ): void;
+  peek(): Promise<ProjectionOf<D>>;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

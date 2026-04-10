@@ -1,9 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation } from "convex/react";
-import { useSuspenseQuery, useQuery } from "@tanstack/react-query";
-import { convexQuery } from "@convex-dev/react-query";
 import { api } from "../../convex/_generated/api";
-import { useState, useCallback } from "react";
+import { useState } from "react";
+import { createActorHooks } from "../../convex/components/actors/client/react";
+import {
+  counter,
+  wallet,
+  fragile,
+  pingPong,
+  countdown,
+  leaderboard,
+} from "../../convex/actors";
+
+const { useActor, useActorResponse } = createActorHooks(api.actorFunctions);
 
 export const Route = createFileRoute("/")({
   component: Home,
@@ -119,29 +127,6 @@ type Response = {
     | { kind: "defect"; error: string; attempts: number };
 };
 
-function useActorSend() {
-  const sendMut = useMutation(api.actorFunctions.send);
-  return useCallback(
-    async (
-      actorType: string,
-      name: string,
-      msgType: string,
-      payload: Record<string, unknown>,
-      opts?: { at?: number; after?: number },
-    ) => {
-      return await sendMut({ actorType, name, msgType, payload, opts });
-    },
-    [sendMut],
-  );
-}
-
-function usePeek(actorType: string, name: string) {
-  const { data } = useSuspenseQuery(
-    convexQuery(api.actorFunctions.peek, { actorType, name }),
-  );
-  return data;
-}
-
 function ResponseBadge({ response }: { response: Response["response"] }) {
   if (response.kind === "success") {
     return (
@@ -181,10 +166,7 @@ function ResponseLog({ messageIds }: { messageIds: string[] }) {
 }
 
 function ResponseRow({ messageId }: { messageId: string }) {
-  const { data } = useQuery(
-    convexQuery(api.actorFunctions.getResponse, { messageId }),
-  );
-  const resp = data as Response | null | undefined;
+  const resp = useActorResponse(messageId);
   return (
     <div className="flex items-center gap-2 text-sm">
       <span className="text-gray-600 font-mono text-xs">
@@ -202,17 +184,7 @@ function ResponseRow({ messageId }: { messageId: string }) {
 // ── Counter ──────────────────────────────────────────────────────
 
 function CounterActor({ name }: { name: string }) {
-  const projection = usePeek("counter", name);
-  const send = useActorSend();
-
-  const sendMsg = (msgType: string, payload: Record<string, unknown>) => {
-    void send("counter", name, msgType, payload);
-  };
-
-  const count =
-    projection && typeof projection === "object" && "count" in projection
-      ? (projection as { count: number }).count
-      : 0;
+  const { send, peek } = useActor(counter, name);
 
   return (
     <div className="flex-1 border border-gray-700 rounded-lg p-4 bg-gray-900">
@@ -220,29 +192,29 @@ function CounterActor({ name }: { name: string }) {
         <h3 className="font-mono font-semibold text-gray-300 text-sm">
           {name}
         </h3>
-        <span className="text-2xl font-bold tabular-nums">{count}</span>
+        <span className="text-2xl font-bold tabular-nums">{peek?.count ?? 0}</span>
       </div>
       <div className="flex items-center gap-2">
         <button
-          onClick={() => sendMsg("inc", { by: 1 })}
+          onClick={() => void send("inc", { by: 1 })}
           className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
         >
           +1
         </button>
         <button
-          onClick={() => sendMsg("inc", { by: 5 })}
+          onClick={() => void send("inc", { by: 5 })}
           className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
         >
           +5
         </button>
         <button
-          onClick={() => sendMsg("dec", { by: 1 })}
+          onClick={() => void send("dec", { by: 1 })}
           className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-medium transition-colors"
         >
           -1
         </button>
         <button
-          onClick={() => sendMsg("reset", {})}
+          onClick={() => void send("reset", {})}
           className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-medium transition-colors"
         >
           0
@@ -255,19 +227,12 @@ function CounterActor({ name }: { name: string }) {
 // ── Leaderboard ──────────────────────────────────────────────────
 
 function LeaderboardPanel() {
-  const projection = usePeek("leaderboard", "main");
-  const send = useActorSend();
+  const { send, peek } = useActor(leaderboard, "main");
 
-  const data =
-    projection && typeof projection === "object" && "rankings" in projection
-      ? (projection as {
-          rankings: { name: string; count: number }[];
-          lastRefresh?: number;
-        })
-      : { rankings: [] as { name: string; count: number }[], lastRefresh: undefined };
+  const data = peek ?? { rankings: [], lastRefresh: undefined };
 
   const refresh = () => {
-    void send("leaderboard", "main", "refresh", {});
+    void send("refresh", {});
   };
 
   return (
@@ -312,19 +277,17 @@ function LeaderboardPanel() {
 // ── Fragile ──────────────────────────────────────────────────────
 
 function FragileActor({ name }: { name: string }) {
-  const projection = usePeek("fragile", name);
-  const send = useActorSend();
+  const { send, peek } = useActor(fragile, name);
   const [messageIds, setMessageIds] = useState<string[]>([]);
 
-  const sendMsg = async (msgType: string, payload: Record<string, unknown>) => {
-    const id = await send("fragile", name, msgType, payload);
+  const sendTracked = async (
+    ...args: Parameters<typeof send>
+  ) => {
+    const id = await send(...args);
     setMessageIds((prev) => [id, ...prev].slice(0, 8));
   };
 
-  const processed =
-    projection && typeof projection === "object" && "processed" in projection
-      ? (projection as { processed: number }).processed
-      : 0;
+  const processed = peek?.processed ?? 0;
 
   return (
     <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
@@ -338,13 +301,13 @@ function FragileActor({ name }: { name: string }) {
       </div>
       <div className="flex items-center gap-3">
         <button
-          onClick={() => void sendMsg("work", { value: "hello" })}
+          onClick={() => void sendTracked("work", { value: "hello" })}
           className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 rounded text-sm font-medium transition-colors"
         >
           Send "work"
         </button>
         <button
-          onClick={() => void sendMsg("crash", {})}
+          onClick={() => void sendTracked("crash", {})}
           className="px-4 py-2 bg-red-800 hover:bg-red-700 rounded text-sm font-medium transition-colors"
         >
           Send "crash"
@@ -362,11 +325,8 @@ function FragileActor({ name }: { name: string }) {
 // ── Ping Pong ────────────────────────────────────────────────────
 
 function PingPongPanel({ name }: { name: string }) {
-  const projection = usePeek("pingPong", name);
-  const data =
-    projection && typeof projection === "object" && "hits" in projection
-      ? (projection as { hits: number; log: string[] })
-      : { hits: 0, log: [] as string[] };
+  const { peek } = useActor(pingPong, name);
+  const data = peek ?? { hits: 0, log: [] as string[] };
 
   return (
     <div className="flex-1 border border-gray-700 rounded-lg p-4 bg-gray-900">
@@ -388,14 +348,11 @@ function PingPongPanel({ name }: { name: string }) {
 }
 
 function PingPongDemo() {
-  const send = useActorSend();
+  const alice = useActor(pingPong, "alice");
   const [rallies, setRallies] = useState(10);
 
   const serve = async () => {
-    await send("pingPong", "alice", "serve", {
-      to: "bob",
-      rallies: rallies,
-    });
+    await alice.send("serve", { to: "bob", rallies });
   };
 
   return (
@@ -434,28 +391,18 @@ type QueuedMsg = {
 };
 
 function DelayedCounterDemo() {
-  const projection = usePeek("counter", "delayed");
-  const send = useActorSend();
+  const { send, peek } = useActor(counter, "delayed");
   const [queued, setQueued] = useState<QueuedMsg[]>([]);
 
   const sendDelayed = async (by: number, delaySec: number) => {
-    const id = await send(
-      "counter",
-      "delayed",
-      "inc",
-      { by },
-      { after: delaySec * 1000 },
-    );
+    const id = await send("inc", { by }, { after: delaySec * 1000 });
     setQueued((prev) => [
       ...prev,
       { id, by, delay: delaySec, sentAt: Date.now() },
     ].slice(-10));
   };
 
-  const count =
-    projection && typeof projection === "object" && "count" in projection
-      ? (projection as { count: number }).count
-      : 0;
+  const count = peek?.count ?? 0;
 
   return (
     <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
@@ -510,10 +457,7 @@ function DelayedCounterDemo() {
 }
 
 function QueuedRow({ msg }: { msg: QueuedMsg }) {
-  const { data } = useQuery(
-    convexQuery(api.actorFunctions.getResponse, { messageId: msg.id }),
-  );
-  const resp = data as Response | null | undefined;
+  const resp = useActorResponse(msg.id);
   const delivered = resp?.response?.kind === "success";
 
   return (
@@ -537,21 +481,14 @@ function QueuedRow({ msg }: { msg: QueuedMsg }) {
 // ── Countdown Timer ──────────────────────────────────────────────
 
 function CountdownDemo() {
-  const projection = usePeek("countdown", "demo");
-  const send = useActorSend();
+  const { send, peek } = useActor(countdown, "demo");
   const [from, setFrom] = useState(5);
   const [interval, setInterval_] = useState(1);
 
-  const data =
-    projection && typeof projection === "object" && "remaining" in projection
-      ? (projection as { remaining: number; running: boolean; log: string[] })
-      : { remaining: 0, running: false, log: [] as string[] };
+  const data = peek ?? { remaining: 0, running: false, log: [] as string[] };
 
   const start = async () => {
-    await send("countdown", "demo", "start", {
-      from,
-      intervalMs: interval * 1000,
-    });
+    await send("start", { from, intervalMs: interval * 1000 });
   };
 
   return (
@@ -616,16 +553,11 @@ function CountdownDemo() {
 // ── Wallet Transfer ──────────────────────────────────────────────
 
 function WalletPanel({ name }: { name: string }) {
-  const projection = usePeek("wallet", name);
-  const send = useActorSend();
+  const { send, peek } = useActor(wallet, name);
 
-  const raw =
-    projection && typeof projection === "object" && "balance" in projection
-      ? (projection as { balance: number; log?: string[] })
-      : null;
   const data = {
-    balance: raw?.balance ?? 0,
-    log: raw?.log ?? [],
+    balance: peek?.balance ?? 0,
+    log: peek?.log ?? [],
   };
 
   return (
@@ -637,7 +569,7 @@ function WalletPanel({ name }: { name: string }) {
         </span>
       </div>
       <button
-        onClick={() => void send("wallet", name, "deposit", { amount: 100 })}
+        onClick={() => void send("deposit", { amount: 100 })}
         className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
       >
         + $100
@@ -659,12 +591,17 @@ function WalletPanel({ name }: { name: string }) {
 }
 
 function TransferDemo() {
-  const send = useActorSend();
+  const aliceW = useActor(wallet, "alice-w");
+  const bobW = useActor(wallet, "bob-w");
   const [amount, setAmount] = useState(30);
   const [messageIds, setMessageIds] = useState<string[]>([]);
 
-  const doTransfer = async (from: string, to: string, amt: number) => {
-    const id = await send("wallet", from, "transfer", { to, amount: amt });
+  const doTransfer = async (
+    sender: { send: typeof aliceW.send },
+    to: string,
+    amt: number,
+  ) => {
+    const id = await sender.send("transfer", { to, amount: amt });
     setMessageIds((prev) => [id, ...prev].slice(0, 8));
   };
 
@@ -685,13 +622,13 @@ function TransferDemo() {
           min={1}
         />
         <button
-          onClick={() => void doTransfer("alice-w", "bob-w", amount)}
+          onClick={() => void doTransfer(aliceW, "bob-w", amount)}
           className="px-3 py-2 bg-violet-700 hover:bg-violet-600 rounded text-sm font-medium transition-colors"
         >
           Alice -&gt; Bob
         </button>
         <button
-          onClick={() => void doTransfer("bob-w", "alice-w", amount)}
+          onClick={() => void doTransfer(bobW, "alice-w", amount)}
           className="px-3 py-2 bg-violet-700 hover:bg-violet-600 rounded text-sm font-medium transition-colors"
         >
           Bob -&gt; Alice

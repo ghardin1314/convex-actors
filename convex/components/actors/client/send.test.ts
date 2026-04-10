@@ -70,12 +70,9 @@ describe("system.send", () => {
   test("happy path: inserts via enqueue, returns a message id string", async () => {
     const { t, system, ref } = setup({ counter });
     await t.run(async (ctx) => {
-      const messageId = await system.send(ctx, ref, {
-        actorType: "counter",
-        name: "a",
-        msgType: "inc",
-        payload: { by: 5 },
-      });
+      const messageId = await system.send(
+        ctx, ref, counter, "a", "inc", { by: 5 },
+      );
       expect(typeof messageId).toBe("string");
       expect(messageId.length).toBeGreaterThan(0);
     });
@@ -84,13 +81,10 @@ describe("system.send", () => {
   test("unknown actorType throws before touching the component", async () => {
     const { t, system, ref } = setup({ counter });
     await t.run(async (ctx) => {
+      const ghost = { ...counter, type: "ghost" };
       await expect(
-        system.send(ctx, ref, {
-          actorType: "ghost",
-          name: "a",
-          msgType: "inc",
-          payload: { by: 1 },
-        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        system.send(ctx, ref, ghost as any, "a", "inc", { by: 1 }),
       ).rejects.toThrow(/unknown actor type "ghost"/);
     });
   });
@@ -99,12 +93,8 @@ describe("system.send", () => {
     const { t, system, ref } = setup({ counter });
     await t.run(async (ctx) => {
       await expect(
-        system.send(ctx, ref, {
-          actorType: "counter",
-          name: "a",
-          msgType: "bogus",
-          payload: {},
-        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        system.send(ctx, ref, counter, "a", "bogus" as any, {}),
       ).rejects.toThrow(/unknown msgType "bogus"/);
     });
   });
@@ -112,13 +102,10 @@ describe("system.send", () => {
   test("opts.at wins over opts.after when both set", async () => {
     const { t, system, ref } = setup({ counter });
     await t.run(async (ctx) => {
-      const id = await system.send(ctx, ref, {
-        actorType: "counter",
-        name: "a",
-        msgType: "inc",
-        payload: { by: 1 },
-        opts: { at: T0 + 1000, after: 500 },
-      });
+      const id = await system.send(
+        ctx, ref, counter, "a", "inc", { by: 1 },
+        { at: T0 + 1000, after: 500 },
+      );
       expect(id).toBeTruthy();
     });
   });
@@ -126,13 +113,10 @@ describe("system.send", () => {
   test("past opts.at is clamped to now", async () => {
     const { t, system, ref } = setup({ counter });
     await t.run(async (ctx) => {
-      const id = await system.send(ctx, ref, {
-        actorType: "counter",
-        name: "a",
-        msgType: "inc",
-        payload: { by: 1 },
-        opts: { at: T0 - 365 * 24 * 3600 * 1000 },
-      });
+      const id = await system.send(
+        ctx, ref, counter, "a", "inc", { by: 1 },
+        { at: T0 - 365 * 24 * 3600 * 1000 },
+      );
       expect(id).toBeTruthy();
     });
   });
@@ -140,12 +124,9 @@ describe("system.send", () => {
   test("no opts defaults deliverAt to Date.now()", async () => {
     const { t, system, ref } = setup({ counter });
     await t.run(async (ctx) => {
-      const id = await system.send(ctx, ref, {
-        actorType: "counter",
-        name: "a",
-        msgType: "inc",
-        payload: { by: 1 },
-      });
+      const id = await system.send(
+        ctx, ref, counter, "a", "inc", { by: 1 },
+      );
       expect(id).toBeTruthy();
     });
   });

@@ -211,13 +211,7 @@ export const leaderboard = defineActor({
       const entries: { name: string; count: number }[] = [];
       for (const name of LEADERBOARD_COUNTERS) {
         const projection = await ctx.stub(counter, name).peek();
-        const count =
-          projection &&
-          typeof projection === "object" &&
-          "count" in projection
-            ? (projection as { count: number }).count
-            : 0;
-        entries.push({ name, count });
+        entries.push({ name, count: projection?.count ?? 0 });
       }
       entries.sort((a, b) => b.count - a.count);
       state.rankings = entries;

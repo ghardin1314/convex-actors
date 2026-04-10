@@ -1,4 +1,8 @@
-import type { AnyActorDefinition, MessageNamesOf } from "./defineActor";
+import type {
+  AnyActorDefinition,
+  ActorHandlerCtx,
+  ActorStub,
+} from "./defineActor";
 
 // ── Effect descriptors ────────────────────────────────────────────
 
@@ -35,49 +39,10 @@ export class FailSentinel extends Error {
   }
 }
 
-// ── Stub ──────────────────────────────────────────────────────────
-
-/**
- * A handle to another actor, obtained via `ctx.stub(def, name)`. The
- * only operation currently is `send`, which pushes an effect descriptor
- * onto the handler's effect list. `peek` is provided via an injected
- * async callback so the drain wrapper can bind it to
- * `ctx.runQuery(component.actors.getActorState, ...)` + `def.project`
- * without exposing the raw mutation context to the handler.
- */
-export interface Stub<D extends AnyActorDefinition> {
-  send<M extends MessageNamesOf<D>>(
-    msgType: M,
-    payload: Parameters<D["handle"][M]>[1],
-    opts?: { at?: number; after?: number },
-  ): void;
-  peek(): Promise<unknown>;
-}
-
-// ── ActorCtx ──────────────────────────────────────────────────────
-
-/**
- * The context object passed to every handler invocation. Handlers see
- * this as their third parameter (`state, payload, ctx`). It mediates
- * all side effects: cross-actor sends, self-sends, failure signaling.
- * Handlers never touch `ctx.db` or `ctx.scheduler` directly.
- */
-export interface ActorCtx {
-  self(): { type: string; name: string };
-  now(): number;
-  stub<D extends AnyActorDefinition>(def: D, name: string): Stub<D>;
-  sendSelf<D extends AnyActorDefinition>(
-    msgType: MessageNamesOf<D>,
-    payload: unknown,
-    opts?: { at?: number; after?: number },
-  ): void;
-  fail(reason: string, details?: unknown): never;
-}
-
 /**
  * Internal state exposed to the drain wrapper so it can read back the
  * handler's accumulated effects and return value after the handler
- * resolves. Not part of the public `ActorCtx` interface.
+ * resolves. Not part of the public handler ctx interface.
  */
 export interface ActorCtxInternals {
   readonly effects: EffectDescriptor[];
@@ -108,7 +73,7 @@ export interface CreateActorCtxArgs {
 }
 
 /**
- * Build an `ActorCtx` + its drain-visible internals. The drain wrapper
+ * Build a handler ctx + its drain-visible internals. The drain wrapper
  * calls this once per handler invocation, injects the actor address and
  * a stable `now`, and receives back the ctx (to pass to the handler)
  * plus `internals` (to read effects + return value after the handler
@@ -116,7 +81,7 @@ export interface CreateActorCtxArgs {
  */
 export function createActorCtx(
   args: CreateActorCtxArgs,
-): { ctx: ActorCtx; internals: ActorCtxInternals } {
+): { ctx: ActorHandlerCtx; internals: ActorCtxInternals } {
   const effects: EffectDescriptor[] = [];
   const internals: ActorCtxInternals = { effects, returnValue: undefined };
 
@@ -131,7 +96,7 @@ export function createActorCtx(
   function makeStub<D extends AnyActorDefinition>(
     def: D,
     name: string,
-  ): Stub<D> {
+  ): ActorStub<D> {
     return {
       send(msgType, payload, opts) {
         if (!(msgType in def.messages)) {
@@ -148,16 +113,16 @@ export function createActorCtx(
         });
       },
       async peek() {
-        return args.peekFn(def.type, name);
+        return args.peekFn(def.type, name) as ReturnType<typeof this.peek>;
       },
     };
   }
 
-  const ctx: ActorCtx = {
+  const ctx: ActorHandlerCtx = {
     self: () => ({ type: args.selfType, name: args.selfName }),
     now: () => args.now,
 
-    stub<D extends AnyActorDefinition>(def: D, name: string): Stub<D> {
+    stub<D extends AnyActorDefinition>(def: D, name: string): ActorStub<D> {
       return makeStub(def, name);
     },
 

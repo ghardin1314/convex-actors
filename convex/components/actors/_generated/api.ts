@@ -12,6 +12,7 @@ import type * as actors from "../actors.js";
 import type * as client_ctx from "../client/ctx.js";
 import type * as client_defineActor from "../client/defineActor.js";
 import type * as client_execute from "../client/execute.js";
+import type * as client_react from "../client/react.js";
 import type * as client_system from "../client/system.js";
 import type * as drain from "../drain.js";
 import type * as enqueue from "../enqueue.js";
@@ -32,6 +33,7 @@ const fullApi: ApiFromModules<{
   "client/ctx": typeof client_ctx;
   "client/defineActor": typeof client_defineActor;
   "client/execute": typeof client_execute;
+  "client/react": typeof client_react;
   "client/system": typeof client_system;
   drain: typeof drain;
   enqueue: typeof enqueue;

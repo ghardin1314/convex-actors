@@ -53,12 +53,9 @@ describe("system.getResponse", () => {
   test("returns null before any drain has committed", async () => {
     const { t, system, ref } = setup({ counter });
     await t.run(async (ctx) => {
-      const messageId = await system.send(ctx, ref, {
-        actorType: "counter",
-        name: "a",
-        msgType: "inc",
-        payload: { by: 1 },
-      });
+      const messageId = await system.send(
+        ctx, ref, counter, "a", "inc", { by: 1 },
+      );
       const result = await system.getResponse(ctx, { messageId });
       expect(result).toBeNull();
     });

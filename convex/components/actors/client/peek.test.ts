@@ -62,12 +62,9 @@ function setup(defs: Record<string, any>) {
 
 describe("system.peek", () => {
   test("peek on a never-addressed actor returns null", async () => {
-    const { t, system, ref } = setup({ counter });
+    const { t, system } = setup({ counter });
     await t.run(async (ctx) => {
-      const result = await system.peek(ctx, {
-        actorType: "counter",
-        name: "nonexistent",
-      });
+      const result = await system.peek(ctx, counter, "nonexistent");
       expect(result).toBeNull();
     });
   });
@@ -75,40 +72,28 @@ describe("system.peek", () => {
   test("peek after send but before drain returns null (state absent)", async () => {
     const { t, system, ref } = setup({ counter });
     await t.run(async (ctx) => {
-      await system.send(ctx, ref, {
-        actorType: "counter",
-        name: "a",
-        msgType: "inc",
-        payload: { by: 1 },
-      });
+      await system.send(ctx, ref, counter, "a", "inc", { by: 1 });
       // Actor row exists but state is absent (drain hasn't run yet).
-      const result = await system.peek(ctx, {
-        actorType: "counter",
-        name: "a",
-      });
+      const result = await system.peek(ctx, counter, "a");
       expect(result).toBeNull();
     });
   });
 
   test("peek on a definition without project returns null", async () => {
-    const { t, system, ref } = setup({ counter, noProjectActor });
+    const { t, system } = setup({ counter, noProjectActor });
     await t.run(async (ctx) => {
-      const result = await system.peek(ctx, {
-        actorType: "noProject",
-        name: "a",
-      });
+      const result = await system.peek(ctx, noProjectActor, "a");
       expect(result).toBeNull();
     });
   });
 
   test("unknown actorType throws", async () => {
-    const { t, system, ref } = setup({ counter });
+    const { t, system } = setup({ counter });
     await t.run(async (ctx) => {
+      const ghost = { ...counter, type: "ghost" };
       await expect(
-        system.peek(ctx, {
-          actorType: "ghost",
-          name: "a",
-        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        system.peek(ctx, ghost as any, "a"),
       ).rejects.toThrow(/unknown actor type "ghost"/);
     });
   });
