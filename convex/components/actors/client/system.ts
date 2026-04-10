@@ -121,7 +121,7 @@ export class ActorSystem<
     def: D,
     name: string,
     msgType: M,
-    payload: z.infer<D["messages"][M]>,
+    payload: z.infer<D["messages"][M]["payload"]>,
     opts?: { at?: number; after?: number },
   ): Promise<string> {
     return this.sendRaw(
@@ -177,7 +177,7 @@ export class ActorSystem<
     }
 
     // Validate payload against the Zod schema
-    const schema = def.messages[msgType];
+    const schema = def.messages[msgType].payload;
     const parsed = schema.safeParse(payload);
     if (!parsed.success) {
       throw new Error(

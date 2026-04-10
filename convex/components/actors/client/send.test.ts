@@ -28,8 +28,8 @@ const counter = defineActor({
   type: "counter",
   state: z.object({ n: z.number() }),
   messages: {
-    inc: z.object({ by: z.number() }),
-    reset: z.object({}),
+    inc: { payload: z.object({ by: z.number() }) },
+    reset: { payload: z.object({}) },
   },
   initialState: () => ({ n: 0 }),
   handle: {

@@ -14,8 +14,8 @@ const counter = defineActor({
   type: "counter",
   state: z.object({ n: z.number() }),
   messages: {
-    inc: z.object({ by: z.number() }),
-    reset: z.object({}),
+    inc: { payload: z.object({ by: z.number() }) },
+    reset: { payload: z.object({}) },
   },
   initialState: () => ({ n: 0 }),
   handle: {
@@ -31,7 +31,7 @@ const counter = defineActor({
 const inbox = defineActor({
   type: "inbox",
   state: z.object({ items: z.array(z.string()) }),
-  messages: { notify: z.object({ text: z.string() }) },
+  messages: { notify: { payload: z.object({ text: z.string() }) } },
   initialState: () => ({ items: [] }),
   handle: {
     notify: async (state, { text }) => {
@@ -44,12 +44,14 @@ const wallet = defineActor({
   type: "wallet",
   state: z.object({ balance: z.number() }),
   messages: {
-    deposit: z.object({ amount: z.number() }),
-    withdraw: z.object({ amount: z.number() }),
-  },
-  returns: {
-    deposit: z.object({ newBalance: z.number() }),
-    withdraw: z.object({ newBalance: z.number() }),
+    deposit: {
+      payload: z.object({ amount: z.number() }),
+      response: z.object({ newBalance: z.number() }),
+    },
+    withdraw: {
+      payload: z.object({ amount: z.number() }),
+      response: z.object({ newBalance: z.number() }),
+    },
   },
   initialState: () => ({ balance: 0 }),
   handle: {
@@ -69,10 +71,12 @@ const saga = defineActor({
   type: "saga",
   state: z.object({ phase: z.string() }),
   messages: {
-    start: z.object({ target: z.string(), amount: z.number() }),
-    withdrawResult: reply(wallet, "withdraw", {
-      context: z.object({ target: z.string() }),
-    }),
+    start: { payload: z.object({ target: z.string(), amount: z.number() }) },
+    withdrawResult: {
+      payload: reply(wallet, "withdraw", {
+        context: z.object({ target: z.string() }),
+      }),
+    },
   },
   initialState: () => ({ phase: "init" }),
   handle: {
@@ -299,8 +303,8 @@ describe("ask()", () => {
       type: "simpleSaga",
       state: z.object({ phase: z.string() }),
       messages: {
-        go: z.object({}),
-        depositResult: reply(wallet, "deposit"),
+        go: { payload: z.object({}) },
+        depositResult: { payload: reply(wallet, "deposit") },
       },
       initialState: () => ({ phase: "init" }),
       handle: {

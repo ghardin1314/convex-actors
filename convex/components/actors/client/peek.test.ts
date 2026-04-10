@@ -26,7 +26,7 @@ afterEach(() => {
 const counter = defineActor({
   type: "counter",
   state: z.object({ n: z.number() }),
-  messages: { inc: z.object({ by: z.number() }) },
+  messages: { inc: { payload: z.object({ by: z.number() }) } },
   initialState: () => ({ n: 0 }),
   project: (state) => ({ count: state.n }),
   handle: {
@@ -39,7 +39,7 @@ const counter = defineActor({
 const noProjectActor = defineActor({
   type: "noProject",
   state: z.object({ x: z.number() }),
-  messages: { poke: z.object({}) },
+  messages: { poke: { payload: z.object({}) } },
   initialState: () => ({ x: 0 }),
   handle: {
     poke: async () => {},

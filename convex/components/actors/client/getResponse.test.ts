@@ -26,7 +26,7 @@ afterEach(() => {
 const counter = defineActor({
   type: "counter",
   state: z.object({ n: z.number() }),
-  messages: { inc: z.object({ by: z.number() }) },
+  messages: { inc: { payload: z.object({ by: z.number() }) } },
   initialState: () => ({ n: 0 }),
   handle: {
     inc: async (state, { by }) => {

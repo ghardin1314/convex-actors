@@ -11,7 +11,7 @@ const fakeComponent = {} as ActorsComponent;
 const counter = defineActor({
   type: "counter",
   state: z.object({ n: z.number() }),
-  messages: { inc: z.object({ by: z.number() }) },
+  messages: { inc: { payload: z.object({ by: z.number() }) } },
   initialState: () => ({ n: 0 }),
   handle: {
     inc: async (state, { by }) => {
@@ -23,7 +23,7 @@ const counter = defineActor({
 const chatRoom = defineActor({
   type: "chatRoom",
   state: z.object({ members: z.array(z.string()) }),
-  messages: { join: z.object({ user: z.string() }) },
+  messages: { join: { payload: z.object({ user: z.string() }) } },
   initialState: () => ({ members: [] }),
   handle: {
     join: async (state, { user }) => {
@@ -74,7 +74,7 @@ describe("ActorSystem", () => {
     const counterAlias = defineActor({
       type: "counter",
       state: z.object({ n: z.number() }),
-      messages: { inc: z.object({ by: z.number() }) },
+      messages: { inc: { payload: z.object({ by: z.number() }) } },
       initialState: () => ({ n: 0 }),
       handle: {
         inc: async (state, { by }) => {

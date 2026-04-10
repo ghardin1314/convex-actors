@@ -18,8 +18,8 @@ export const counter = defineActor({
   type: "counter",
   state: z.object({ n: z.number() }),
   messages: {
-    inc: z.object({ by: z.number() }),
-    reset: z.object({}),
+    inc: { payload: z.object({ by: z.number() }) },
+    reset: { payload: z.object({}) },
   },
   initialState: () => ({ n: 0 }),
   project: (state) => ({ count: state.n }),
@@ -37,7 +37,7 @@ export const counter = defineActor({
 export const failActor = defineActor({
   type: "failActor",
   state: z.object({}),
-  messages: { doFail: z.object({ reason: z.string() }) },
+  messages: { doFail: { payload: z.object({ reason: z.string() }) } },
   initialState: () => ({}),
   handle: {
     doFail: async (_state, { reason }, ctx) => {
@@ -49,7 +49,7 @@ export const failActor = defineActor({
 export const throwActor = defineActor({
   type: "throwActor",
   state: z.object({}),
-  messages: { boom: z.object({}) },
+  messages: { boom: { payload: z.object({}) } },
   initialState: () => ({}),
   handle: {
     boom: async () => {
@@ -62,7 +62,7 @@ export const senderActor = defineActor({
   type: "senderActor",
   state: z.object({ sent: z.number() }),
   messages: {
-    sendToCounter: z.object({ counterName: z.string(), by: z.number() }),
+    sendToCounter: { payload: z.object({ counterName: z.string(), by: z.number() }) },
   },
   initialState: () => ({ sent: 0 }),
   handle: {

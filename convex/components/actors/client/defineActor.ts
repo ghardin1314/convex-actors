@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+// ── Message definition shape ────────────────────────────────────
+
+/** Each message is defined as `{ payload: ZodSchema, response?: ZodSchema }`. */
+export interface MessageDef {
+  payload: z.ZodTypeAny;
+  response?: z.ZodTypeAny;
+}
+
 // ── Reply schema helpers ─────────────────────────────────────────
 
 const zActorAddr = z.object({ type: z.string(), name: z.string() });
@@ -8,7 +16,7 @@ const zActorAddr = z.object({ type: z.string(), name: z.string() });
  * Build a Zod schema for a reply-handler's message payload.
  *
  * Two signatures:
- *   // From an actor definition — extracts return schema automatically
+ *   // From an actor definition — extracts response schema automatically
  *   reply(account, "hold", { context: z.object({ holdId: z.string() }) })
  *
  *   // From a raw value schema — for self-referencing actors or external types
@@ -41,7 +49,7 @@ export function reply(
   if (typeof msgTypeOrOpts === "string") {
     // Overload 1: reply(def, msgType, opts?)
     const def = defOrSchema as AnyActorDefinition;
-    valueSchema = def.returns?.[msgTypeOrOpts] ?? z.unknown();
+    valueSchema = def.messages[msgTypeOrOpts]?.response ?? z.unknown();
     ctxSchema = opts?.context ?? z.null();
   } else {
     // Overload 2: reply(valueSchema, opts?)
@@ -88,30 +96,24 @@ export type ReplyPayload<Value = unknown, Context = null> = {
 export interface ActorDefinition<
   Type extends string = string,
   StateV extends z.ZodTypeAny = z.ZodTypeAny,
-  Msgs extends Record<string, z.ZodTypeAny> = Record<string, z.ZodTypeAny>,
-  Rets extends Partial<Record<keyof Msgs & string, z.ZodTypeAny>> = {},
+  Msgs extends Record<string, MessageDef> = Record<string, MessageDef>,
   Projection = unknown,
 > {
   type: Type;
   state: StateV;
   messages: Msgs;
-  /** Optional per-message return-type schemas. Used by `reply()` to type
-   *  the success value in reply payloads. */
-  returns?: Rets;
   initialState: () => z.infer<StateV>;
   project?: (state: z.infer<StateV>) => Projection;
   handle: {
     [K in keyof Msgs]: (
       state: z.infer<StateV>,
-      payload: z.infer<Msgs[K]>,
+      payload: z.infer<Msgs[K]["payload"]>,
       ctx: ActorHandlerCtx<
-        ActorDefinition<Type, StateV, Msgs, Rets, Projection>
+        ActorDefinition<Type, StateV, Msgs, Projection>
       >,
     ) => Promise<
-      K extends keyof Rets
-        ? Rets[K] extends z.ZodTypeAny
-          ? z.infer<Rets[K]>
-          : unknown
+      Msgs[K]["response"] extends z.ZodTypeAny
+        ? z.infer<Msgs[K]["response"]>
         : unknown
     >;
   };
@@ -135,7 +137,7 @@ export interface ActorHandlerCtx<
   stub<D extends AnyActorDefinition>(def: D, name: string): ActorStub<D>;
   sendSelf<M extends MessageNamesOf<Self>>(
     msgType: M,
-    payload: z.infer<Self["messages"][M]>,
+    payload: z.infer<Self["messages"][M]["payload"]>,
     opts?: { at?: number; after?: number },
   ): void;
   /** Send a message and route the response back as a new message to this actor.
@@ -149,7 +151,7 @@ export interface ActorHandlerCtx<
     def: D,
     name: string,
     msgType: M,
-    payload: z.infer<D["messages"][M]>,
+    payload: z.infer<D["messages"][M]["payload"]>,
     opts: AskOpts<Self, H>,
   ): void;
   fail(reason: string, details?: unknown): never;
@@ -165,7 +167,7 @@ export type ValidReplyHandlers<
   D extends AnyActorDefinition,
   M extends MessageNamesOf<D>,
 > = {
-  [H in MessageNamesOf<Self>]: z.infer<Self["messages"][H]> extends ReplyPayload<
+  [H in MessageNamesOf<Self>]: z.infer<Self["messages"][H]["payload"]> extends ReplyPayload<
     ReturnOf<D, M>,
     unknown
   >
@@ -191,7 +193,7 @@ type ContextParam<C> = [C] extends [null] ? { context?: null } : { context: C };
 export interface ActorStub<D extends AnyActorDefinition> {
   send<M extends MessageNamesOf<D>>(
     msgType: M,
-    payload: z.infer<D["messages"][M]>,
+    payload: z.infer<D["messages"][M]["payload"]>,
     opts?: { at?: number; after?: number },
   ): void;
   peek(): Promise<ProjectionOf<D>>;
@@ -200,33 +202,28 @@ export interface ActorStub<D extends AnyActorDefinition> {
 // ── Utility types ────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type AnyActorDefinition = ActorDefinition<string, any, any, any, any>;
+export type AnyActorDefinition = ActorDefinition<string, any, any, any>;
 
 export type StateOf<D extends AnyActorDefinition> = z.infer<D["state"]>;
 
 export type PayloadOf<
   D extends AnyActorDefinition,
   M extends keyof D["messages"],
-> = z.infer<D["messages"][M]>;
+> = z.infer<D["messages"][M]["payload"]>;
 
 export type ProjectionOf<D extends AnyActorDefinition> =
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  D extends ActorDefinition<any, any, any, any, infer P> ? P : never;
+  D extends ActorDefinition<any, any, any, infer P> ? P : never;
 
 export type MessageNamesOf<D extends AnyActorDefinition> =
   keyof D["messages"] & string;
 
-/** Infer the return type of a handler from the actor's `returns` schemas. */
+/** Infer the return type of a handler from the message's `response` schema. */
 export type ReturnOf<
   D extends AnyActorDefinition,
   M extends MessageNamesOf<D>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-> = D extends ActorDefinition<any, any, any, infer Rets, any>
-  ? M extends keyof Rets
-    ? Rets[M] extends z.ZodTypeAny
-      ? z.infer<Rets[M]>
-      : unknown
-    : unknown
+> = D["messages"][M]["response"] extends z.ZodTypeAny
+  ? z.infer<D["messages"][M]["response"]>
   : unknown;
 
 /**
@@ -236,7 +233,7 @@ export type ReturnOf<
 export type ReplyContextOf<
   D extends AnyActorDefinition,
   H extends MessageNamesOf<D>,
-> = z.infer<D["messages"][H]> extends { context: infer C } ? C : null;
+> = z.infer<D["messages"][H]["payload"]> extends { context: infer C } ? C : null;
 
 // ── defineActor ──────────────────────────────────────────────────
 
@@ -252,11 +249,10 @@ export type ReplyContextOf<
 export function defineActor<
   Type extends string,
   StateV extends z.ZodTypeAny,
-  Msgs extends Record<string, z.ZodTypeAny>,
-  Rets extends Partial<Record<keyof Msgs & string, z.ZodTypeAny>> = {},
+  Msgs extends Record<string, MessageDef>,
   Projection = undefined,
 >(
-  def: ActorDefinition<Type, StateV, Msgs, Rets, Projection>,
-): ActorDefinition<Type, StateV, Msgs, Rets, Projection> {
+  def: ActorDefinition<Type, StateV, Msgs, Projection>,
+): ActorDefinition<Type, StateV, Msgs, Projection> {
   return def;
 }

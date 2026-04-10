@@ -74,7 +74,7 @@ export function createActorHooks(actorApi: ActorApi) {
   ): {
     send: <M extends MessageNamesOf<D>>(
       msgType: M,
-      payload: z.infer<D["messages"][M]>,
+      payload: z.infer<D["messages"][M]["payload"]>,
       opts?: { at?: number; after?: number },
     ) => Promise<string>;
     peek: ProjectionOf<D>;
@@ -88,7 +88,7 @@ export function createActorHooks(actorApi: ActorApi) {
     const send = useCallback(
       <M extends MessageNamesOf<D>>(
         msgType: M,
-        payload: z.infer<D["messages"][M]>,
+        payload: z.infer<D["messages"][M]["payload"]>,
         opts?: { at?: number; after?: number },
       ) => {
         return sendMut({

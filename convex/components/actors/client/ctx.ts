@@ -117,7 +117,7 @@ export function createActorCtx(
             `stub.send: unknown msgType "${String(msgType)}" for actor type "${def.type}"`,
           );
         }
-        const schema = def.messages[String(msgType)];
+        const schema = def.messages[String(msgType)].payload;
         const parsed = schema.safeParse(payload);
         if (!parsed.success) {
           throw new Error(
@@ -153,7 +153,7 @@ export function createActorCtx(
           `sendSelf: unknown msgType "${String(msgType)}" for actor type "${args.selfType}"`,
         );
       }
-      const schema = selfDef.messages[String(msgType)];
+      const schema = selfDef.messages[String(msgType)].payload;
       const parsed = schema.safeParse(payload);
       if (!parsed.success) {
         throw new Error(
@@ -175,7 +175,7 @@ export function createActorCtx(
           `ask: unknown msgType "${String(msgType)}" for actor type "${def.type}"`,
         );
       }
-      const schema = def.messages[String(msgType)];
+      const schema = def.messages[String(msgType)].payload;
       const parsed = schema.safeParse(payload);
       if (!parsed.success) {
         throw new Error(

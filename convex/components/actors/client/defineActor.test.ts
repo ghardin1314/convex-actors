@@ -22,9 +22,9 @@ describe("defineActor", () => {
       lastActivity: z.number(),
     }),
     messages: {
-      join: z.object({ user: z.string() }),
-      leave: z.object({ user: z.string() }),
-      post: z.object({ from: z.string(), text: z.string() }),
+      join: { payload: z.object({ user: z.string() }) },
+      leave: { payload: z.object({ user: z.string() }) },
+      post: { payload: z.object({ from: z.string(), text: z.string() }) },
     },
     initialState: () => ({ members: [], messages: [], lastActivity: 0 }),
     project: (state) => ({
@@ -50,7 +50,7 @@ describe("defineActor", () => {
     const spec = {
       type: "counter" as const,
       state: z.object({ n: z.number() }),
-      messages: { inc: z.object({ by: z.number() }) },
+      messages: { inc: { payload: z.object({ by: z.number() }) } },
       initialState: () => ({ n: 0 }),
       handle: {
         inc: async (state: { n: number }, { by }: { by: number }) => {
@@ -75,7 +75,7 @@ describe("defineActor", () => {
       "post",
     ]);
     // sanity: the schema is a real Zod schema (has `parse` method)
-    expect(typeof chatRoom.messages.join.parse).toBe("function");
+    expect(typeof chatRoom.messages.join.payload.parse).toBe("function");
     expect(typeof chatRoom.state.parse).toBe("function");
   });
 
@@ -117,7 +117,7 @@ describe("defineActor", () => {
     const counter = defineActor({
       type: "counter",
       state: z.object({ n: z.number() }),
-      messages: { inc: z.object({ by: z.number() }) },
+      messages: { inc: { payload: z.object({ by: z.number() }) } },
       initialState: () => ({ n: 0 }),
       handle: {
         inc: async (state, { by }) => {
@@ -130,23 +130,25 @@ describe("defineActor", () => {
   });
 
   test("Zod schemas validate payloads at runtime", () => {
-    expect(() => chatRoom.messages.join.parse({ user: "alice" })).not.toThrow();
-    expect(() => chatRoom.messages.join.parse({ user: 42 })).toThrow();
-    expect(() => chatRoom.messages.join.parse({})).toThrow();
+    expect(() => chatRoom.messages.join.payload.parse({ user: "alice" })).not.toThrow();
+    expect(() => chatRoom.messages.join.payload.parse({ user: 42 })).toThrow();
+    expect(() => chatRoom.messages.join.payload.parse({})).toThrow();
   });
 });
 
-describe("returns + reply()", () => {
+describe("response + reply()", () => {
   const wallet = defineActor({
     type: "wallet",
     state: z.object({ balance: z.number() }),
     messages: {
-      deposit: z.object({ amount: z.number() }),
-      withdraw: z.object({ amount: z.number() }),
-    },
-    returns: {
-      deposit: z.object({ newBalance: z.number() }),
-      withdraw: z.object({ newBalance: z.number() }),
+      deposit: {
+        payload: z.object({ amount: z.number() }),
+        response: z.object({ newBalance: z.number() }),
+      },
+      withdraw: {
+        payload: z.object({ amount: z.number() }),
+        response: z.object({ newBalance: z.number() }),
+      },
     },
     initialState: () => ({ balance: 0 }),
     handle: {
@@ -162,7 +164,7 @@ describe("returns + reply()", () => {
     },
   });
 
-  test("ReturnOf infers return type from returns schemas", () => {
+  test("ReturnOf infers return type from response schemas", () => {
     expectTypeOf<ReturnOf<typeof wallet, "deposit">>().toEqualTypeOf<{
       newBalance: number;
     }>();
@@ -209,10 +211,12 @@ describe("returns + reply()", () => {
       type: "saga",
       state: z.object({ phase: z.string() }),
       messages: {
-        start: z.object({}),
-        result: reply(wallet, "deposit", {
-          context: z.object({ holdId: z.string() }),
-        }),
+        start: { payload: z.object({}) },
+        result: {
+          payload: reply(wallet, "deposit", {
+            context: z.object({ holdId: z.string() }),
+          }),
+        },
       },
       initialState: () => ({ phase: "init" }),
       handle: {
@@ -253,12 +257,14 @@ describe("returns + reply()", () => {
       type: "saga",
       state: z.object({ phase: z.string() }),
       messages: {
-        start: z.object({ amount: z.number() }),
-        depositResult: reply(wallet, "deposit", {
-          context: z.object({ memo: z.string() }),
-        }),
-        withdrawResult: reply(wallet, "withdraw"),
-        unrelated: z.object({ foo: z.string() }),
+        start: { payload: z.object({ amount: z.number() }) },
+        depositResult: {
+          payload: reply(wallet, "deposit", {
+            context: z.object({ memo: z.string() }),
+          }),
+        },
+        withdrawResult: { payload: reply(wallet, "withdraw") },
+        unrelated: { payload: z.object({ foo: z.string() }) },
       },
       initialState: () => ({ phase: "init" }),
       handle: {
