@@ -18,6 +18,7 @@ import type * as enqueue from "../enqueue.js";
 import type * as kick from "../kick.js";
 import type * as responses from "../responses.js";
 import type * as shared from "../shared.js";
+import type * as testHelpers from "../testHelpers.js";
 
 import type {
   ApiFromModules,
@@ -37,6 +38,7 @@ const fullApi: ApiFromModules<{
   kick: typeof kick;
   responses: typeof responses;
   shared: typeof shared;
+  testHelpers: typeof testHelpers;
 }> = anyApi as any;
 
 /**

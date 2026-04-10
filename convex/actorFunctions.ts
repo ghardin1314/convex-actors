@@ -1,0 +1,54 @@
+/**
+ * Public Convex functions for interacting with actors from the frontend.
+ * Separated from actors.ts to avoid a type cycle: this file imports
+ * `internal.actors.execute` (a self-reference through _generated/api)
+ * while actors.ts does not import _generated/api's `internal`.
+ */
+import { v } from "convex/values";
+import { internal } from "./_generated/api";
+import { mutation, query } from "./_generated/server";
+import { system } from "./actors";
+
+export const send = mutation({
+  args: {
+    actorType: v.string(),
+    name: v.string(),
+    msgType: v.string(),
+    payload: v.any(),
+    opts: v.optional(
+      v.object({
+        at: v.optional(v.number()),
+        after: v.optional(v.number()),
+      }),
+    ),
+  },
+  returns: v.string(),
+  handler: async (ctx, args): Promise<string> => {
+    return await system.send(ctx, internal.actors.execute, {
+      actorType: args.actorType,
+      name: args.name,
+      msgType: args.msgType,
+      payload: args.payload,
+      opts: args.opts,
+    });
+  },
+});
+
+export const peek = query({
+  args: {
+    actorType: v.string(),
+    name: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await system.peek(ctx, args);
+  },
+});
+
+export const getResponse = query({
+  args: {
+    messageId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await system.getResponse(ctx, args);
+  },
+});
