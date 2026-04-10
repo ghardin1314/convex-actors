@@ -104,11 +104,18 @@ export function createActorCtx(
             `stub.send: unknown msgType "${String(msgType)}" for actor type "${def.type}"`,
           );
         }
+        const schema = def.messages[String(msgType)];
+        const parsed = schema.safeParse(payload);
+        if (!parsed.success) {
+          throw new Error(
+            `stub.send: invalid payload for "${def.type}.${String(msgType)}": ${parsed.error.message}`,
+          );
+        }
         effects.push({
           actorType: def.type,
           name,
           msgType: String(msgType),
-          payload,
+          payload: parsed.data,
           deliverAt: resolveDeliverAt(opts),
         });
       },
@@ -133,11 +140,18 @@ export function createActorCtx(
           `sendSelf: unknown msgType "${String(msgType)}" for actor type "${args.selfType}"`,
         );
       }
+      const schema = selfDef.messages[String(msgType)];
+      const parsed = schema.safeParse(payload);
+      if (!parsed.success) {
+        throw new Error(
+          `sendSelf: invalid payload for "${args.selfType}.${String(msgType)}": ${parsed.error.message}`,
+        );
+      }
       effects.push({
         actorType: args.selfType,
         name: args.selfName,
         msgType: String(msgType),
-        payload,
+        payload: parsed.data,
         deliverAt: resolveDeliverAt(opts),
       });
     },

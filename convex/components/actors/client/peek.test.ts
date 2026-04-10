@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
-import { v } from "convex/values";
+import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { components } from "../../../_generated/api.js";
@@ -25,8 +25,8 @@ afterEach(() => {
 
 const counter = defineActor({
   type: "counter",
-  state: v.object({ n: v.number() }),
-  messages: { inc: v.object({ by: v.number() }) },
+  state: z.object({ n: z.number() }),
+  messages: { inc: z.object({ by: z.number() }) },
   initialState: () => ({ n: 0 }),
   project: (state) => ({ count: state.n }),
   handle: {
@@ -38,8 +38,8 @@ const counter = defineActor({
 
 const noProjectActor = defineActor({
   type: "noProject",
-  state: v.object({ x: v.number() }),
-  messages: { poke: v.object({}) },
+  state: z.object({ x: z.number() }),
+  messages: { poke: z.object({}) },
   initialState: () => ({ x: 0 }),
   handle: {
     poke: async () => {},

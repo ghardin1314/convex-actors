@@ -1,10 +1,10 @@
-import type { Infer, Validator } from "convex/values";
+import type { z } from "zod";
 
 /**
  * Definition of an actor. Plain data object — `defineActor` is a pure
  * identity function whose only job is to pin the literal `type` field
  * and infer the state / payload / projection types from the attached
- * validators and `project` return type.
+ * Zod schemas and `project` return type.
  *
  * Handler ctx is typed as `ActorHandlerCtx<Self>` where Self is the
  * actor's own definition, giving handlers full type safety for
@@ -12,28 +12,19 @@ import type { Infer, Validator } from "convex/values";
  */
 export interface ActorDefinition<
   Type extends string = string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  StateV extends Validator<any, "required", any> = Validator<
-    unknown,
-    "required",
-    string
-  >,
-  Msgs extends Record<
-    string,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    Validator<any, "required", any>
-  > = Record<string, Validator<unknown, "required", string>>,
+  StateV extends z.ZodTypeAny = z.ZodTypeAny,
+  Msgs extends Record<string, z.ZodTypeAny> = Record<string, z.ZodTypeAny>,
   Projection = unknown,
 > {
   type: Type;
   state: StateV;
   messages: Msgs;
-  initialState: () => Infer<StateV>;
-  project?: (state: Infer<StateV>) => Projection;
+  initialState: () => z.infer<StateV>;
+  project?: (state: z.infer<StateV>) => Projection;
   handle: {
     [K in keyof Msgs]: (
-      state: Infer<StateV>,
-      payload: Infer<Msgs[K]>,
+      state: z.infer<StateV>,
+      payload: z.infer<Msgs[K]>,
       ctx: ActorHandlerCtx<ActorDefinition<Type, StateV, Msgs, Projection>>,
     ) => Promise<unknown>;
   };
@@ -58,7 +49,7 @@ export interface ActorHandlerCtx<
   ): ActorStub<D>;
   sendSelf<M extends MessageNamesOf<Self>>(
     msgType: M,
-    payload: Infer<Self["messages"][M]>,
+    payload: z.infer<Self["messages"][M]>,
     opts?: { at?: number; after?: number },
   ): void;
   fail(reason: string, details?: unknown): never;
@@ -71,7 +62,7 @@ export interface ActorHandlerCtx<
 export interface ActorStub<D extends AnyActorDefinition> {
   send<M extends MessageNamesOf<D>>(
     msgType: M,
-    payload: Infer<D["messages"][M]>,
+    payload: z.infer<D["messages"][M]>,
     opts?: { at?: number; after?: number },
   ): void;
   peek(): Promise<ProjectionOf<D>>;
@@ -80,12 +71,12 @@ export interface ActorStub<D extends AnyActorDefinition> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyActorDefinition = ActorDefinition<string, any, any, any>;
 
-export type StateOf<D extends AnyActorDefinition> = Infer<D["state"]>;
+export type StateOf<D extends AnyActorDefinition> = z.infer<D["state"]>;
 
 export type PayloadOf<
   D extends AnyActorDefinition,
   M extends keyof D["messages"],
-> = Infer<D["messages"][M]>;
+> = z.infer<D["messages"][M]>;
 
 export type ProjectionOf<D extends AnyActorDefinition> =
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -97,7 +88,7 @@ export type MessageNamesOf<D extends AnyActorDefinition> =
 /**
  * Pure identity function: `defineActor(spec)` returns `spec`. The work
  * happens in the type parameters, which capture the literal `type` and
- * the validator shapes so downstream APIs (`ActorSystem`, stubs,
+ * the Zod schema shapes so downstream APIs (`ActorSystem`, stubs,
  * `send`) can enforce `(type, name) -> payload` at the call site.
  *
  * No runtime side effects — registration happens later in
@@ -105,13 +96,8 @@ export type MessageNamesOf<D extends AnyActorDefinition> =
  */
 export function defineActor<
   Type extends string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  StateV extends Validator<any, "required", any>,
-  Msgs extends Record<
-    string,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    Validator<any, "required", any>
-  >,
+  StateV extends z.ZodTypeAny,
+  Msgs extends Record<string, z.ZodTypeAny>,
   Projection = undefined,
 >(
   def: ActorDefinition<Type, StateV, Msgs, Projection>,

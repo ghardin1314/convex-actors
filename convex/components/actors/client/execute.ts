@@ -67,6 +67,10 @@ export function makeExecute(
         };
       }
 
+      // Payload is already validated by the time it reaches execute:
+      // external sends validate in sendRaw, handler-to-handler sends
+      // validate in stub.send/sendSelf. No duplicate validation here.
+
       const rawState = await ctx.runQuery(
         component.actors.getActorState,
         { actorType: args.actorType, name: args.actorName },

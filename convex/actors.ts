@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { z } from "zod";
 import { components } from "./_generated/api";
 import { makeExecute } from "./components/actors/client/execute";
 import { ActorSystem } from "./components/actors/client/system";
@@ -8,11 +8,11 @@ import { defineActor } from "./components/actors/client/defineActor";
 
 export const counter = defineActor({
   type: "counter",
-  state: v.object({ count: v.number() }),
+  state: z.object({ count: z.number() }),
   messages: {
-    inc: v.object({ by: v.number() }),
-    dec: v.object({ by: v.number() }),
-    reset: v.object({}),
+    inc: z.object({ by: z.number() }),
+    dec: z.object({ by: z.number() }),
+    reset: z.object({}),
   },
   initialState: () => ({ count: 0 }),
   project: (state) => ({ count: state.count }),
@@ -31,14 +31,14 @@ export const counter = defineActor({
 
 export const wallet = defineActor({
   type: "wallet",
-  state: v.object({
-    balance: v.number(),
-    log: v.array(v.string()),
+  state: z.object({
+    balance: z.number(),
+    log: z.array(z.string()),
   }),
   messages: {
-    deposit: v.object({ amount: v.number() }),
-    withdraw: v.object({ amount: v.number() }),
-    transfer: v.object({ to: v.string(), amount: v.number() }),
+    deposit: z.object({ amount: z.number() }),
+    withdraw: z.object({ amount: z.number() }),
+    transfer: z.object({ to: z.string(), amount: z.number() }),
   },
   initialState: () => ({ balance: 0, log: [] }),
   project: (state) => ({ balance: state.balance, log: state.log }),
@@ -85,10 +85,10 @@ export const wallet = defineActor({
 
 export const fragile = defineActor({
   type: "fragile",
-  state: v.object({ processed: v.number() }),
+  state: z.object({ processed: z.number() }),
   messages: {
-    work: v.object({ value: v.string() }),
-    crash: v.object({}),
+    work: z.object({ value: z.string() }),
+    crash: z.object({}),
   },
   initialState: () => ({ processed: 0 }),
   project: (state) => ({ processed: state.processed }),
@@ -105,11 +105,11 @@ export const fragile = defineActor({
 
 export const pingPong = defineActor({
   type: "pingPong",
-  state: v.object({ hits: v.number(), log: v.array(v.string()) }),
+  state: z.object({ hits: z.number(), log: z.array(z.string()) }),
   messages: {
-    serve: v.object({ to: v.string(), rallies: v.number() }),
-    reset: v.object({}),
-    hit: v.object({ from: v.string(), ralliesLeft: v.number() }),
+    serve: z.object({ to: z.string(), rallies: z.number() }),
+    reset: z.object({}),
+    hit: z.object({ from: z.string(), ralliesLeft: z.number() }),
   },
   initialState: () => ({ hits: 0, log: [] }),
   project: (state) => ({ hits: state.hits, log: state.log }),
@@ -149,14 +149,14 @@ export const pingPong = defineActor({
 
 export const countdown = defineActor({
   type: "countdown",
-  state: v.object({
-    remaining: v.number(),
-    running: v.boolean(),
-    log: v.array(v.string()),
+  state: z.object({
+    remaining: z.number(),
+    running: z.boolean(),
+    log: z.array(z.string()),
   }),
   messages: {
-    start: v.object({ from: v.number(), intervalMs: v.number() }),
-    tick: v.object({ intervalMs: v.number() }),
+    start: z.object({ from: z.number(), intervalMs: z.number() }),
+    tick: z.object({ intervalMs: z.number() }),
   },
   initialState: () => ({ remaining: 0, running: false, log: [] }),
   project: (state) => ({
@@ -192,14 +192,14 @@ const LEADERBOARD_COUNTERS = ["alice", "bob", "charlie"];
 
 export const leaderboard = defineActor({
   type: "leaderboard",
-  state: v.object({
-    rankings: v.array(
-      v.object({ name: v.string(), count: v.number() }),
+  state: z.object({
+    rankings: z.array(
+      z.object({ name: z.string(), count: z.number() }),
     ),
-    lastRefresh: v.optional(v.number()),
+    lastRefresh: z.number().optional(),
   }),
   messages: {
-    refresh: v.object({}),
+    refresh: z.object({}),
   },
   initialState: () => ({ rankings: [], lastRefresh: undefined }),
   project: (state) => ({

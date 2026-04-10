@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { z } from "zod";
 import { describe, expect, expectTypeOf, test } from "vitest";
 
 import { defineActor } from "./defineActor";
@@ -10,8 +10,8 @@ const fakeComponent = {} as ActorsComponent;
 
 const counter = defineActor({
   type: "counter",
-  state: v.object({ n: v.number() }),
-  messages: { inc: v.object({ by: v.number() }) },
+  state: z.object({ n: z.number() }),
+  messages: { inc: z.object({ by: z.number() }) },
   initialState: () => ({ n: 0 }),
   handle: {
     inc: async (state, { by }) => {
@@ -22,8 +22,8 @@ const counter = defineActor({
 
 const chatRoom = defineActor({
   type: "chatRoom",
-  state: v.object({ members: v.array(v.string()) }),
-  messages: { join: v.object({ user: v.string() }) },
+  state: z.object({ members: z.array(z.string()) }),
+  messages: { join: z.object({ user: z.string() }) },
   initialState: () => ({ members: [] }),
   handle: {
     join: async (state, { user }) => {
@@ -73,8 +73,8 @@ describe("ActorSystem", () => {
   test("throws on construction when two definitions share a type", () => {
     const counterAlias = defineActor({
       type: "counter",
-      state: v.object({ n: v.number() }),
-      messages: { inc: v.object({ by: v.number() }) },
+      state: z.object({ n: z.number() }),
+      messages: { inc: z.object({ by: z.number() }) },
       initialState: () => ({ n: 0 }),
       handle: {
         inc: async (state, { by }) => {

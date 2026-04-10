@@ -10,7 +10,7 @@ import type {
   MessageNamesOf,
   ProjectionOf,
 } from "./defineActor";
-import type { Infer } from "convex/values";
+import type { z } from "zod";
 
 export type RunQueryCtx = {
   runQuery: <Query extends FunctionReference<"query", "public" | "internal">>(
@@ -121,7 +121,7 @@ export class ActorSystem<
     def: D,
     name: string,
     msgType: M,
-    payload: Infer<D["messages"][M]>,
+    payload: z.infer<D["messages"][M]>,
     opts?: { at?: number; after?: number },
   ): Promise<string> {
     return this.sendRaw(
@@ -175,6 +175,16 @@ export class ActorSystem<
           .join(", ") || "<none>"})`,
       );
     }
+
+    // Validate payload against the Zod schema
+    const schema = def.messages[msgType];
+    const parsed = schema.safeParse(payload);
+    if (!parsed.success) {
+      throw new Error(
+        `send: invalid payload for "${actorType}.${msgType}": ${parsed.error.message}`,
+      );
+    }
+    payload = parsed.data;
 
     const now = Date.now();
     let deliverAt: number;

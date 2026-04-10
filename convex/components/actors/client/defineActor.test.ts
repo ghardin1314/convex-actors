@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { z } from "zod";
 import { describe, expect, expectTypeOf, test } from "vitest";
 
 import {
@@ -11,15 +11,15 @@ import {
 describe("defineActor", () => {
   const chatRoom = defineActor({
     type: "chatRoom",
-    state: v.object({
-      members: v.array(v.string()),
-      messages: v.array(v.object({ from: v.string(), text: v.string() })),
-      lastActivity: v.number(),
+    state: z.object({
+      members: z.array(z.string()),
+      messages: z.array(z.object({ from: z.string(), text: z.string() })),
+      lastActivity: z.number(),
     }),
     messages: {
-      join: v.object({ user: v.string() }),
-      leave: v.object({ user: v.string() }),
-      post: v.object({ from: v.string(), text: v.string() }),
+      join: z.object({ user: z.string() }),
+      leave: z.object({ user: z.string() }),
+      post: z.object({ from: z.string(), text: z.string() }),
     },
     initialState: () => ({ members: [], messages: [], lastActivity: 0 }),
     project: (state) => ({
@@ -44,8 +44,8 @@ describe("defineActor", () => {
   test("is a pure identity function (no registration side effects)", () => {
     const spec = {
       type: "counter" as const,
-      state: v.object({ n: v.number() }),
-      messages: { inc: v.object({ by: v.number() }) },
+      state: z.object({ n: z.number() }),
+      messages: { inc: z.object({ by: z.number() }) },
       initialState: () => ({ n: 0 }),
       handle: {
         inc: async (state: { n: number }, { by }: { by: number }) => {
@@ -62,19 +62,19 @@ describe("defineActor", () => {
     expectTypeOf(chatRoom.type).toEqualTypeOf<"chatRoom">();
   });
 
-  test("exposes the state + payload validators at runtime", () => {
-    // payload validators are reachable at runtime (used for type inference only)
+  test("exposes the state + payload schemas at runtime", () => {
+    // payload schemas are reachable at runtime (used for validation + type inference)
     expect(Object.keys(chatRoom.messages).sort()).toEqual([
       "join",
       "leave",
       "post",
     ]);
-    // sanity: the validator is a real Convex validator (has `kind` field)
-    expect("kind" in chatRoom.messages.join).toBe(true);
-    expect("kind" in chatRoom.state).toBe(true);
+    // sanity: the schema is a real Zod schema (has `parse` method)
+    expect(typeof chatRoom.messages.join.parse).toBe("function");
+    expect(typeof chatRoom.state.parse).toBe("function");
   });
 
-  test("initialState matches the state validator shape", () => {
+  test("initialState matches the state schema shape", () => {
     const s0 = chatRoom.initialState();
     expect(s0).toEqual({ members: [], messages: [], lastActivity: 0 });
     expectTypeOf(s0).toEqualTypeOf<{
@@ -93,7 +93,7 @@ describe("defineActor", () => {
     }>();
   });
 
-  test("StateOf / PayloadOf infer from the validators", () => {
+  test("StateOf / PayloadOf infer from the schemas", () => {
     expectTypeOf<StateOf<typeof chatRoom>>().toEqualTypeOf<{
       members: string[];
       messages: { from: string; text: string }[];
@@ -111,8 +111,8 @@ describe("defineActor", () => {
   test("definitions without `project` type ProjectionOf as undefined", () => {
     const counter = defineActor({
       type: "counter",
-      state: v.object({ n: v.number() }),
-      messages: { inc: v.object({ by: v.number() }) },
+      state: z.object({ n: z.number() }),
+      messages: { inc: z.object({ by: z.number() }) },
       initialState: () => ({ n: 0 }),
       handle: {
         inc: async (state, { by }) => {
@@ -122,5 +122,11 @@ describe("defineActor", () => {
     });
     expect(counter.project).toBeUndefined();
     expectTypeOf<ProjectionOf<typeof counter>>().toEqualTypeOf<undefined>();
+  });
+
+  test("Zod schemas validate payloads at runtime", () => {
+    expect(() => chatRoom.messages.join.parse({ user: "alice" })).not.toThrow();
+    expect(() => chatRoom.messages.join.parse({ user: 42 })).toThrow();
+    expect(() => chatRoom.messages.join.parse({})).toThrow();
   });
 });

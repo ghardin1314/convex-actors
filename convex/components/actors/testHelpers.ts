@@ -3,6 +3,7 @@
  * component so drain.test.ts can call drainLoop directly with a real
  * executeFn handle (no mocks, no DI seams).
  */
+import { z } from "zod";
 import { v } from "convex/values";
 import { createDraft, finishDraft } from "immer";
 import { internalMutation } from "./_generated/server.js";
@@ -15,10 +16,10 @@ import type { AnyActorDefinition } from "./client/defineActor.js";
 
 export const counter = defineActor({
   type: "counter",
-  state: v.object({ n: v.number() }),
+  state: z.object({ n: z.number() }),
   messages: {
-    inc: v.object({ by: v.number() }),
-    reset: v.object({}),
+    inc: z.object({ by: z.number() }),
+    reset: z.object({}),
   },
   initialState: () => ({ n: 0 }),
   project: (state) => ({ count: state.n }),
@@ -35,8 +36,8 @@ export const counter = defineActor({
 
 export const failActor = defineActor({
   type: "failActor",
-  state: v.object({}),
-  messages: { doFail: v.object({ reason: v.string() }) },
+  state: z.object({}),
+  messages: { doFail: z.object({ reason: z.string() }) },
   initialState: () => ({}),
   handle: {
     doFail: async (_state, { reason }, ctx) => {
@@ -47,8 +48,8 @@ export const failActor = defineActor({
 
 export const throwActor = defineActor({
   type: "throwActor",
-  state: v.object({}),
-  messages: { boom: v.object({}) },
+  state: z.object({}),
+  messages: { boom: z.object({}) },
   initialState: () => ({}),
   handle: {
     boom: async () => {
@@ -59,9 +60,9 @@ export const throwActor = defineActor({
 
 export const senderActor = defineActor({
   type: "senderActor",
-  state: v.object({ sent: v.number() }),
+  state: z.object({ sent: z.number() }),
   messages: {
-    sendToCounter: v.object({ counterName: v.string(), by: v.number() }),
+    sendToCounter: z.object({ counterName: z.string(), by: z.number() }),
   },
   initialState: () => ({ sent: 0 }),
   handle: {

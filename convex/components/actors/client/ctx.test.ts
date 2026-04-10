@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { z } from "zod";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -12,10 +12,10 @@ const T0 = 1_700_000_000_000;
 
 const counter = defineActor({
   type: "counter",
-  state: v.object({ n: v.number() }),
+  state: z.object({ n: z.number() }),
   messages: {
-    inc: v.object({ by: v.number() }),
-    reset: v.object({}),
+    inc: z.object({ by: z.number() }),
+    reset: z.object({}),
   },
   initialState: () => ({ n: 0 }),
   handle: {
@@ -30,8 +30,8 @@ const counter = defineActor({
 
 const inbox = defineActor({
   type: "inbox",
-  state: v.object({ items: v.array(v.string()) }),
-  messages: { notify: v.object({ text: v.string() }) },
+  state: z.object({ items: z.array(z.string()) }),
+  messages: { notify: z.object({ text: z.string() }) },
   initialState: () => ({ items: [] }),
   handle: {
     notify: async (state, { text }) => {
@@ -123,6 +123,14 @@ describe("ActorCtx", () => {
     ).toThrow(/unknown msgType "bogus"/);
   });
 
+  test("stub.send throws on invalid payload", () => {
+    const { ctx } = makeCtx();
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ctx.stub(inbox, "a").send("notify", { text: 42 } as any),
+    ).toThrow(/invalid payload/);
+  });
+
   test("stub.peek calls the injected peekFn", async () => {
     const { ctx } = makeCtx({
       peekFn: async (type, name) => ({ type, name, peeked: true }),
@@ -151,6 +159,14 @@ describe("ActorCtx", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (ctx as any).sendSelf("bogus", {}),
     ).toThrow(/unknown msgType "bogus"/);
+  });
+
+  test("sendSelf throws on invalid payload", () => {
+    const { ctx } = makeCtx();
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (ctx as any).sendSelf("inc", { by: "not a number" }),
+    ).toThrow(/invalid payload/);
   });
 
   test("fail throws a FailSentinel with reason and details", () => {

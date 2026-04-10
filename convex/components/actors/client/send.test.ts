@@ -1,7 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
-import { createFunctionHandle } from "convex/server";
-import { v } from "convex/values";
+import { z } from "zod";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { components } from "../../../_generated/api.js";
@@ -27,10 +26,10 @@ afterEach(() => {
 
 const counter = defineActor({
   type: "counter",
-  state: v.object({ n: v.number() }),
+  state: z.object({ n: z.number() }),
   messages: {
-    inc: v.object({ by: v.number() }),
-    reset: v.object({}),
+    inc: z.object({ by: z.number() }),
+    reset: z.object({}),
   },
   initialState: () => ({ n: 0 }),
   handle: {
@@ -96,6 +95,16 @@ describe("system.send", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         system.send(ctx, ref, counter, "a", "bogus" as any, {}),
       ).rejects.toThrow(/unknown msgType "bogus"/);
+    });
+  });
+
+  test("invalid payload throws before touching the component", async () => {
+    const { t, system, ref } = setup({ counter });
+    await t.run(async (ctx) => {
+      await expect(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        system.send(ctx, ref, counter, "a", "inc", { by: "bad" } as any),
+      ).rejects.toThrow(/invalid payload/);
     });
   });
 
