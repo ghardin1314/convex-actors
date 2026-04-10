@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { components } from './_generated/api'
+import { account, auction } from './auctionActors'
 import { defineActor, reply } from './components/actors/client/defineActor'
 import { defineSaga } from './components/actors/client/defineSaga'
 import { makeExecute } from './components/actors/client/execute'
@@ -448,6 +449,8 @@ const defs = {
   leaderboard,
   transferSaga,
   multiTransfer,
+  account,
+  auction,
 }
 
 export const execute = makeExecute(defs, components.actors)

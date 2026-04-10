@@ -10,6 +10,7 @@
 
 import type * as actorFunctions from "../actorFunctions.js";
 import type * as actors from "../actors.js";
+import type * as auctionActors from "../auctionActors.js";
 import type * as myFunctions from "../myFunctions.js";
 
 import type {
@@ -21,6 +22,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   actorFunctions: typeof actorFunctions;
   actors: typeof actors;
+  auctionActors: typeof auctionActors;
   myFunctions: typeof myFunctions;
 }>;
 
