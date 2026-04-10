@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { components } from './_generated/api'
 import { defineActor, reply } from './components/actors/client/defineActor'
+import { defineSaga } from './components/actors/client/defineSaga'
 import { makeExecute } from './components/actors/client/execute'
 import { ActorSystem } from './components/actors/client/system'
 
@@ -354,89 +355,83 @@ export const leaderboard = defineActor({
   },
 })
 
-// ── Saga demo: orchestrated transfer via ask/reply ──────────────
+// ── Saga demo: orchestrated transfer via defineSaga ─────────────
 
-export const transferSaga = defineActor({
+export const transferSaga = defineSaga({
   type: 'transferSaga',
-  state: z.object({
-    phase: z.enum(['init', 'withdrawing', 'depositing', 'done', 'failed']),
+  input: z.object({
     from: z.string(),
     to: z.string(),
     amount: z.number(),
-    failReason: z.string().optional(),
   }),
-  messages: {
-    start: {
-      payload: z.object({
-        from: z.string(),
-        to: z.string(),
-        amount: z.number(),
+  context: z.object({}),
+  initialContext: () => ({}),
+  firstStep: 'withdraw',
+  steps: {
+    withdraw: {
+      run: (input, _context, ctx) => {
+        return ctx.ask(wallet, input.from, 'withdraw', {
+          amount: input.amount,
+        })
+      },
+      onSuccess: (_value, _input, context) => ({
+        context,
+        next: 'deposit',
       }),
-      response: z.object({ phase: z.string() }),
+      compensate: (input, _context, ctx) => {
+        ctx.stub(wallet, input.from).send('deposit', {
+          amount: input.amount,
+        })
+      },
     },
-    withdrawResult: {
-      payload: reply(wallet, 'withdraw', {
-        context: z.object({ to: z.string(), amount: z.number() }),
-      }),
+    deposit: {
+      run: (input, _context, ctx) => {
+        return ctx.ask(wallet, input.to, 'deposit', {
+          amount: input.amount,
+        })
+      },
+      onSuccess: () => ({ next: null }),
     },
-    depositResult: { payload: reply(wallet, 'deposit') },
   },
-  initialState: () => ({
-    phase: 'init' as const,
-    from: '',
-    to: '',
-    amount: 0,
+})
+
+// ── Compensation demo: multi-withdraw with rollback ─────────────
+
+export const multiTransfer = defineSaga({
+  type: 'multiTransfer',
+  input: z.object({
+    sources: z.array(z.string()),
+    target: z.string(),
+    amount: z.number(),
   }),
-  project: (state) => ({
-    phase: state.phase,
-    from: state.from,
-    to: state.to,
-    amount: state.amount,
-    failReason: state.failReason,
-  }),
-  handle: {
-    start: async (state, { from, to, amount }, ctx) => {
-      state.phase = 'withdrawing'
-      state.from = from
-      state.to = to
-      state.amount = amount
-      ctx.ask(
-        wallet,
-        from,
-        'withdraw',
-        { amount },
-        {
-          handler: 'withdrawResult',
-          context: { to, amount },
-        },
-      )
-      return { phase: state.phase }
+  context: z.object({ index: z.number() }),
+  initialContext: () => ({ index: 0 }),
+  firstStep: 'withdraw',
+  steps: {
+    withdraw: {
+      run: (input, context, ctx) =>
+        ctx.ask(wallet, input.sources[context.index], 'withdraw', {
+          amount: input.amount,
+        }),
+      onSuccess: (_value, input, context) => {
+        const nextIndex = context.index + 1
+        if (nextIndex < input.sources.length) {
+          return { context: { index: nextIndex }, next: 'withdraw' as const }
+        }
+        return { context, next: 'deposit' as const }
+      },
+      compensate: (input, context, ctx) => {
+        ctx.stub(wallet, input.sources[context.index]).send('deposit', {
+          amount: input.amount,
+        })
+      },
     },
-    withdrawResult: async (state, { result, context }, ctx) => {
-      if (result.kind === 'success') {
-        state.phase = 'depositing'
-        ctx.ask(
-          wallet,
-          context.to,
-          'deposit',
-          { amount: context.amount },
-          {
-            handler: 'depositResult',
-          },
-        )
-      } else {
-        state.phase = 'failed'
-        state.failReason = result.kind === 'fail' ? result.reason : result.error
-      }
-    },
-    depositResult: async (state, { result }) => {
-      if (result.kind === 'success') {
-        state.phase = 'done'
-      } else {
-        state.phase = 'failed'
-        state.failReason = result.kind === 'fail' ? result.reason : result.error
-        // In a real saga we'd compensate by re-depositing to the source
-      }
+    deposit: {
+      run: (input, _context, ctx) =>
+        ctx.ask(wallet, input.target, 'deposit', {
+          amount: input.amount * input.sources.length,
+        }),
+      onSuccess: () => ({ next: null }),
     },
   },
 })
@@ -452,6 +447,7 @@ const defs = {
   countdown,
   leaderboard,
   transferSaga,
+  multiTransfer,
 }
 
 export const execute = makeExecute(defs, components.actors)

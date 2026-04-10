@@ -13,7 +13,7 @@
  */
 import { useCallback } from "react";
 import { useMutation } from "convex/react";
-import { useSuspenseQuery, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { convexQuery } from "@convex-dev/react-query";
 import type { FunctionReference } from "convex/server";
 import type {
@@ -77,11 +77,11 @@ export function createActorHooks(actorApi: ActorApi) {
       payload: z.infer<D["messages"][M]["payload"]>,
       opts?: { at?: number; after?: number },
     ) => Promise<string>;
-    peek: ProjectionOf<D>;
+    peek: ProjectionOf<D> | undefined;
   } {
     const sendMut = useMutation(actorApi.send);
 
-    const { data: projection } = useSuspenseQuery(
+    const { data: projection } = useQuery(
       convexQuery(actorApi.peek, { actorType: def.type, name }),
     );
 

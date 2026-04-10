@@ -189,6 +189,8 @@ type ContextParam<C> = [C] extends [null] ? { context?: null } : { context: C };
 /**
  * Typed stub handle returned by `ctx.stub(def, name)`. Defined here so
  * `ActorHandlerCtx` can reference it without importing from ctx.ts.
+ * 
+ * TODO: Move ask method here instead of on ActorHandlerCtx
  */
 export interface ActorStub<D extends AnyActorDefinition> {
   send<M extends MessageNamesOf<D>>(

@@ -351,7 +351,7 @@ describe("integration: ask/reply (transferSaga)", () => {
       actorType: "transferSaga",
       name: "tx-1",
     });
-    expect(sagaState).toMatchObject({ phase: "done", amount: 75 });
+    expect(sagaState).toMatchObject({ phase: "completed" });
 
     // Wallets should reflect the transfer
     const alice = await t.query(api.actorFunctions.peek, {

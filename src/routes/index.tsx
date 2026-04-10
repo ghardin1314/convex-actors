@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { api } from "../../convex/_generated/api";
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { useMutation } from "convex/react";
 import { createActorHooks } from "../../convex/components/actors/client/react";
 import {
   counter,
@@ -11,6 +12,7 @@ import {
   countdown,
   leaderboard,
   transferSaga,
+  multiTransfer,
 } from "../../convex/actors";
 
 const { useActor, useActorResponse } = createActorHooks(api.actorFunctions);
@@ -70,6 +72,15 @@ function Home() {
             color="violet"
           />
           <TransferSagaDemo />
+        </section>
+
+        <section className="flex flex-col gap-4">
+          <SectionHeader
+            title="Saga Compensation (rollback on failure)"
+            description="Withdraw from two wallets and deposit the sum to a third. If the second withdraw fails (insufficient funds), the first withdrawal is automatically compensated — the money goes back."
+            color="rose"
+          />
+          <CompensationDemo />
         </section>
 
         <section className="flex flex-col gap-4">
@@ -656,29 +667,37 @@ function JobRunnerDemo() {
 // ── Transfer Saga ───────────────────────────────────────────────
 
 function TransferSagaDemo() {
-  const { send: sendSaga, peek: sagaPeek } = useActor(
-    transferSaga,
-    "demo-tx",
-  );
+  const [sagaName, setSagaName] = useState("demo-tx-init");
+  const { peek: sagaPeek } = useActor(transferSaga, sagaName);
+  const sendRaw = useMutation(api.actorFunctions.send);
   const { send: sendAlice, peek: alicePeek } = useActor(wallet, "saga-alice");
   const { send: sendBob, peek: bobPeek } = useActor(wallet, "saga-bob");
   const [amount, setAmount] = useState(25);
 
   const saga = sagaPeek ?? {
-    phase: "init",
-    from: "",
-    to: "",
-    amount: 0,
+    phase: "idle",
+    currentStep: null,
+    completedSteps: [],
     failReason: undefined,
   };
   const aliceBalance = alicePeek?.balance ?? 0;
   const bobBalance = bobPeek?.balance ?? 0;
 
+  const startSaga = useCallback((from: string, to: string) => {
+    const name = `demo-tx-${crypto.randomUUID().slice(0, 8)}`;
+    setSagaName(name);
+    void sendRaw({
+      actorType: "transferSaga",
+      name,
+      msgType: "start",
+      payload: { from, to, amount },
+    });
+  }, [sendRaw, amount]);
+
   const phaseColors: Record<string, string> = {
-    init: "bg-gray-700 text-gray-300",
-    withdrawing: "bg-amber-900 text-amber-300",
-    depositing: "bg-blue-900 text-blue-300",
-    done: "bg-emerald-900 text-emerald-300",
+    idle: "bg-gray-700 text-gray-300",
+    running: "bg-amber-900 text-amber-300",
+    completed: "bg-emerald-900 text-emerald-300",
     failed: "bg-red-900 text-red-300",
   };
 
@@ -686,7 +705,7 @@ function TransferSagaDemo() {
     <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-mono font-semibold text-gray-300">
-          transferSaga:demo-tx
+          transferSaga:{sagaName}
         </h3>
         <span
           className={`text-xs px-2 py-1 rounded font-mono ${phaseColors[saga.phase] ?? "bg-gray-700 text-gray-300"}`}
@@ -742,25 +761,13 @@ function TransferSagaDemo() {
           min={1}
         />
         <button
-          onClick={() =>
-            void sendSaga("start", {
-              from: "saga-alice",
-              to: "saga-bob",
-              amount,
-            })
-          }
+          onClick={() => startSaga("saga-alice", "saga-bob")}
           className="px-3 py-2 bg-violet-700 hover:bg-violet-600 rounded text-sm font-medium transition-colors"
         >
           Alice → Bob (saga)
         </button>
         <button
-          onClick={() =>
-            void sendSaga("start", {
-              from: "saga-bob",
-              to: "saga-alice",
-              amount,
-            })
-          }
+          onClick={() => startSaga("saga-bob", "saga-alice")}
           className="px-3 py-2 bg-violet-700 hover:bg-violet-600 rounded text-sm font-medium transition-colors"
         >
           Bob → Alice (saga)
@@ -770,6 +777,134 @@ function TransferSagaDemo() {
         The saga asks wallet A to withdraw, waits for the reply, then asks wallet
         B to deposit. Each step is a typed ask/reply. Try transferring more than
         available — the saga catches the fail reply and stops.
+      </p>
+    </div>
+  );
+}
+
+// ── Compensation Demo ──────────────────────────────────────────
+
+function CompensationDemo() {
+  const [sagaName, setSagaName] = useState("comp-init");
+  const { peek: sagaPeek } = useActor(multiTransfer, sagaName);
+  const sendRaw = useMutation(api.actorFunctions.send);
+
+  const { send: sendW1, peek: w1Peek } = useActor(wallet, "comp-alice");
+  const { send: sendW2, peek: w2Peek } = useActor(wallet, "comp-bob");
+  const { peek: targetPeek } = useActor(wallet, "comp-charlie");
+
+  const [amount, setAmount] = useState(50);
+
+  const saga = sagaPeek ?? {
+    phase: "idle",
+    currentStep: null,
+    completedSteps: [] as string[],
+    failReason: undefined,
+  };
+  const w1Balance = w1Peek?.balance ?? 0;
+  const w2Balance = w2Peek?.balance ?? 0;
+  const targetBalance = targetPeek?.balance ?? 0;
+
+  const startSaga = useCallback(() => {
+    const name = `comp-${crypto.randomUUID().slice(0, 8)}`;
+    setSagaName(name);
+    void sendRaw({
+      actorType: "multiTransfer",
+      name,
+      msgType: "start",
+      payload: {
+        sources: ["comp-alice", "comp-bob"],
+        target: "comp-charlie",
+        amount,
+      },
+    });
+  }, [sendRaw, amount]);
+
+  const phaseColor: Record<string, string> = {
+    idle: "bg-gray-700 text-gray-300",
+    running: "bg-amber-900 text-amber-300",
+    completed: "bg-emerald-900 text-emerald-300",
+    failed: "bg-red-900 text-red-300",
+  };
+
+  return (
+    <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-mono font-semibold text-gray-300">
+          multiTransfer:{sagaName}
+        </h3>
+        <span
+          className={`text-xs px-2 py-1 rounded font-mono ${phaseColor[saga.phase] ?? "bg-gray-700 text-gray-300"}`}
+        >
+          {saga.phase}
+          {saga.failReason ? `: ${saga.failReason}` : ""}
+        </span>
+      </div>
+
+      <div className="flex gap-3 mb-4">
+        {[
+          { label: "Alice (source 1)", balance: w1Balance, fund: () => void sendW1("deposit", { amount: 100 }) },
+          { label: "Bob (source 2)", balance: w2Balance, fund: () => void sendW2("deposit", { amount: 100 }) },
+          { label: "Charlie (target)", balance: targetBalance, fund: undefined },
+        ].map((w) => (
+          <div key={w.label} className="flex-1 border border-gray-700 rounded-lg p-3 bg-gray-800">
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-mono text-xs text-gray-400">{w.label}</span>
+              <span className="font-bold tabular-nums">${w.balance.toFixed(2)}</span>
+            </div>
+            {w.fund && (
+              <button
+                onClick={w.fund}
+                className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
+              >
+                + $100
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {saga.phase === "failed" && (
+        <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded-lg text-sm">
+          <span className="text-red-400 font-medium">
+            {(saga.completedSteps?.length ?? 0) > 0 ? "Compensated!" : "Failed!"}
+          </span>
+          <span className="text-red-300 ml-2">
+            {(saga.completedSteps?.length ?? 0) > 0
+              ? `Withdraw failed at step ${(saga.completedSteps?.length ?? 0) + 1} — ${saga.completedSteps?.length} prior withdrawal(s) refunded.`
+              : `First withdraw failed (${saga.failReason}) — nothing to compensate.`}
+          </span>
+        </div>
+      )}
+
+      {(saga.completedSteps?.length ?? 0) > 0 && (
+        <div className="mb-4 text-xs text-gray-500 font-mono">
+          steps: {saga.completedSteps?.join(" → ")}
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
+        <span className="text-sm text-gray-400">Withdraw</span>
+        <span className="text-sm text-gray-500">$</span>
+        <input
+          type="number"
+          value={amount}
+          onChange={(e) => setAmount(Math.max(1, Number(e.target.value) || 1))}
+          className="w-20 bg-gray-800 border border-gray-600 rounded px-3 py-2 text-center text-sm"
+          min={1}
+        />
+        <span className="text-sm text-gray-400">from each → Charlie</span>
+        <button
+          onClick={startSaga}
+          className="px-3 py-2 bg-rose-700 hover:bg-rose-600 rounded text-sm font-medium transition-colors"
+        >
+          Run Saga
+        </button>
+      </div>
+      <p className="text-xs text-gray-500 mt-3">
+        Withdraws ${amount} from Alice and ${amount} from Bob, deposits ${amount * 2} to Charlie.
+        Fund Alice but leave Bob empty, then run — Bob&apos;s withdraw fails and Alice&apos;s
+        withdrawal is automatically rolled back.
       </p>
     </div>
   );
