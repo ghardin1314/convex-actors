@@ -146,6 +146,36 @@ describe("integration: scheduled drain via function handle", () => {
     expect(result).toBeNull();
   });
 
+  test("wallet returns handler values in response", async () => {
+    const t = setup();
+
+    // Fund the wallet
+    await t.mutation(api.actorFunctions.send, {
+      actorType: "wallet",
+      name: "alice",
+      msgType: "deposit",
+      payload: { amount: 100 },
+    });
+    await finishScheduled(t);
+
+    // Withdraw and check response
+    const msgId = await t.mutation(api.actorFunctions.send, {
+      actorType: "wallet",
+      name: "alice",
+      msgType: "withdraw",
+      payload: { amount: 30 },
+    });
+    await finishScheduled(t);
+
+    const response = await t.query(api.actorFunctions.getResponse, {
+      messageId: msgId,
+    });
+    expect(response!.response).toEqual({
+      kind: "success",
+      value: { newBalance: 70 },
+    });
+  });
+
   test("independent actors maintain separate state", async () => {
     const t = setup();
 
@@ -173,5 +203,205 @@ describe("integration: scheduled drain via function handle", () => {
     });
     expect(alice).toEqual({ count: 100 });
     expect(bob).toEqual({ count: 1 });
+  });
+});
+
+describe("integration: ask/reply (jobRunner → fragile)", () => {
+  test("successful work: ask routes echo back to jobRunner", async () => {
+    const t = setup();
+
+    await t.mutation(api.actorFunctions.send, {
+      actorType: "jobRunner",
+      name: "runner-1",
+      msgType: "dispatch",
+      payload: { worker: "w1", value: "hello" },
+    });
+    await finishScheduled(t);
+
+    const state = await t.query(api.actorFunctions.peek, {
+      actorType: "jobRunner",
+      name: "runner-1",
+    });
+    expect(state).toMatchObject({
+      pending: 0,
+      completed: [{ job: "hello", echo: "hello" }],
+      failed: [],
+    });
+  });
+
+  test("crash: defect routes back after max retries", async () => {
+    const t = setup();
+
+    await t.mutation(api.actorFunctions.send, {
+      actorType: "jobRunner",
+      name: "runner-2",
+      msgType: "dispatchCrash",
+      payload: { worker: "w-crash" },
+    });
+    // Needs multiple drain cycles for retry attempts + defect + reply routing
+    await finishScheduled(t);
+
+    const state = await t.query(api.actorFunctions.peek, {
+      actorType: "jobRunner",
+      name: "runner-2",
+    });
+    expect(state).toMatchObject({
+      pending: 0,
+      completed: [],
+    });
+    // Should have one failed job with the defect error
+    expect((state as { failed: { job: string; error: string }[] }).failed).toHaveLength(1);
+    expect((state as { failed: { job: string; error: string }[] }).failed[0].job).toBe("crash-w-crash");
+  });
+
+  test("mixed: success and crash in same runner", async () => {
+    const t = setup();
+
+    await t.mutation(api.actorFunctions.send, {
+      actorType: "jobRunner",
+      name: "runner-3",
+      msgType: "dispatch",
+      payload: { worker: "w-ok", value: "good-job" },
+    });
+    await t.mutation(api.actorFunctions.send, {
+      actorType: "jobRunner",
+      name: "runner-3",
+      msgType: "dispatchCrash",
+      payload: { worker: "w-bad" },
+    });
+    await finishScheduled(t);
+
+    const state = await t.query(api.actorFunctions.peek, {
+      actorType: "jobRunner",
+      name: "runner-3",
+    }) as { pending: number; completed: { job: string }[]; failed: { job: string }[] };
+    expect(state.pending).toBe(0);
+    expect(state.completed).toHaveLength(1);
+    expect(state.completed[0].job).toBe("good-job");
+    expect(state.failed).toHaveLength(1);
+    expect(state.failed[0].job).toBe("crash-w-bad");
+  });
+});
+
+describe("integration: ask/reply in regular actor (wallet.transfer)", () => {
+  test("transfer asks target wallet to deposit, gets confirmation", async () => {
+    const t = setup();
+
+    // Fund alice
+    await t.mutation(api.actorFunctions.send, {
+      actorType: "wallet",
+      name: "alice",
+      msgType: "deposit",
+      payload: { amount: 100 },
+    });
+    await finishScheduled(t);
+
+    // Alice transfers to bob
+    await t.mutation(api.actorFunctions.send, {
+      actorType: "wallet",
+      name: "alice",
+      msgType: "transfer",
+      payload: { to: "bob", amount: 40 },
+    });
+    // Drains: alice.transfer → bob.deposit → alice.transferDepositResult
+    await finishScheduled(t);
+
+    const alice = await t.query(api.actorFunctions.peek, {
+      actorType: "wallet",
+      name: "alice",
+    });
+    const bob = await t.query(api.actorFunctions.peek, {
+      actorType: "wallet",
+      name: "bob",
+    });
+    const a = alice as { balance: number; log: string[] };
+    const b = bob as { balance: number; log: string[] };
+    expect(a.balance).toBe(60);
+    expect(b.balance).toBe(40);
+    // Alice's log should show the confirmation
+    expect(a.log.some((l: string) => l.includes("confirmed"))).toBe(true);
+  });
+});
+
+describe("integration: ask/reply (transferSaga)", () => {
+  test("successful transfer: withdraw → deposit via saga", async () => {
+    const t = setup();
+
+    // Fund source wallet
+    await t.mutation(api.actorFunctions.send, {
+      actorType: "wallet",
+      name: "alice",
+      msgType: "deposit",
+      payload: { amount: 200 },
+    });
+    await finishScheduled(t);
+
+    // Start the saga
+    await t.mutation(api.actorFunctions.send, {
+      actorType: "transferSaga",
+      name: "tx-1",
+      msgType: "start",
+      payload: { from: "alice", to: "bob", amount: 75 },
+    });
+    // Let all scheduled drains fire (saga start → withdraw → withdrawResult → deposit → depositResult)
+    await finishScheduled(t);
+
+    // Saga should be done
+    const sagaState = await t.query(api.actorFunctions.peek, {
+      actorType: "transferSaga",
+      name: "tx-1",
+    });
+    expect(sagaState).toMatchObject({ phase: "done", amount: 75 });
+
+    // Wallets should reflect the transfer
+    const alice = await t.query(api.actorFunctions.peek, {
+      actorType: "wallet",
+      name: "alice",
+    });
+    const bob = await t.query(api.actorFunctions.peek, {
+      actorType: "wallet",
+      name: "bob",
+    });
+    expect((alice as { balance: number }).balance).toBe(125);
+    expect((bob as { balance: number }).balance).toBe(75);
+  });
+
+  test("failed transfer: insufficient funds routes fail to saga", async () => {
+    const t = setup();
+
+    // Fund source wallet with insufficient amount
+    await t.mutation(api.actorFunctions.send, {
+      actorType: "wallet",
+      name: "poor",
+      msgType: "deposit",
+      payload: { amount: 10 },
+    });
+    await finishScheduled(t);
+
+    // Start saga that tries to withdraw more than available
+    await t.mutation(api.actorFunctions.send, {
+      actorType: "transferSaga",
+      name: "tx-fail",
+      msgType: "start",
+      payload: { from: "poor", to: "bob", amount: 999 },
+    });
+    await finishScheduled(t);
+
+    // Saga should be failed
+    const sagaState = await t.query(api.actorFunctions.peek, {
+      actorType: "transferSaga",
+      name: "tx-fail",
+    });
+    expect(sagaState).toMatchObject({
+      phase: "failed",
+      failReason: "insufficient_funds",
+    });
+
+    // Source wallet should be untouched
+    const poor = await t.query(api.actorFunctions.peek, {
+      actorType: "wallet",
+      name: "poor",
+    });
+    expect((poor as { balance: number }).balance).toBe(10);
   });
 });

@@ -77,6 +77,12 @@ export declare const components: {
             msgType: string;
             name: string;
             payload: any;
+            replyTo?: {
+              actorType: string;
+              context: any;
+              handler: string;
+              name: string;
+            };
           }>;
           executeFn: string;
         },

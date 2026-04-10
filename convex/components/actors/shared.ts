@@ -64,6 +64,20 @@ export const RESPONSE_TTL_MS: {
   defect: undefined,
 };
 
+// -------- Reply routing --------
+
+/**
+ * Stored on a message row when the sender used `ctx.ask()`. After the
+ * handler writes a response, the drain loop checks this field and
+ * enqueues a reply message to the asking actor.
+ */
+export const vReplyTo = v.object({
+  actorType: v.string(),
+  name: v.string(),
+  handler: v.string(),
+  context: v.any(),
+});
+
 // -------- Validators --------
 
 /**

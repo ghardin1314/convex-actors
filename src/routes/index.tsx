@@ -6,9 +6,11 @@ import {
   counter,
   wallet,
   fragile,
+  jobRunner,
   pingPong,
   countdown,
   leaderboard,
+  transferSaga,
 } from "../../convex/actors";
 
 const { useActor, useActorResponse } = createActorHooks(api.actorFunctions);
@@ -54,11 +56,29 @@ function Home() {
 
         <section className="flex flex-col gap-4">
           <SectionHeader
-            title="Wallet Transfer"
-            description="The source wallet owns the transfer: balance check + debit + send deposit all happen in one handler — no TOCTOU race. Fails via ctx.fail() if funds are insufficient."
+            title="Wallet Transfer (ask/reply)"
+            description="The source wallet debits itself, then uses ctx.ask() to deposit into the target wallet. The reply routes back to a transferDepositResult handler that logs the confirmation — or compensates on failure."
             color="violet"
           />
           <TransferDemo />
+        </section>
+
+        <section className="flex flex-col gap-4">
+          <SectionHeader
+            title="Transfer Saga (chained ask/reply)"
+            description="A separate saga actor orchestrates a two-step transfer: ask wallet A to withdraw, on success ask wallet B to deposit. Each step is a separate ask with the reply driving the next phase. Demonstrates the saga pattern with typed context carry-through."
+            color="violet"
+          />
+          <TransferSagaDemo />
+        </section>
+
+        <section className="flex flex-col gap-4">
+          <SectionHeader
+            title="Job Runner (ask + defect handling)"
+            description='Dispatches jobs to a fragile worker via ctx.ask(). Successful work echoes back through the reply handler. Crash jobs defect after 3 retries — the defect routes back too, so the runner can track failures.'
+            color="red"
+          />
+          <JobRunnerDemo />
         </section>
 
         <section className="flex flex-col gap-4">
@@ -546,6 +566,211 @@ function CountdownDemo() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Job Runner ──────────────────────────────────────────────────
+
+function JobRunnerDemo() {
+  const { send, peek } = useActor(jobRunner, "demo");
+  const [value, setValue] = useState("hello");
+
+  const data = peek ?? { pending: 0, completed: [], failed: [] };
+
+  return (
+    <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-mono font-semibold text-gray-300">
+          jobRunner:demo
+        </h3>
+        <div className="flex items-center gap-3">
+          {data.pending > 0 && (
+            <span className="text-xs bg-amber-900 text-amber-300 px-2 py-1 rounded">
+              {data.pending} pending
+            </span>
+          )}
+          <span className="text-sm text-gray-400">
+            {data.completed.length} done / {data.failed.length} failed
+          </span>
+        </div>
+      </div>
+      <div className="flex items-center gap-3 mb-3">
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm flex-1"
+          placeholder="Job value..."
+        />
+        <button
+          onClick={() => void send("dispatch", { worker: "w1", value })}
+          className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 rounded text-sm font-medium transition-colors"
+        >
+          Dispatch Work
+        </button>
+        <button
+          onClick={() => void send("dispatchCrash", { worker: "w-crash" })}
+          className="px-4 py-2 bg-red-800 hover:bg-red-700 rounded text-sm font-medium transition-colors"
+        >
+          Dispatch Crash
+        </button>
+      </div>
+      <p className="text-xs text-gray-500 mb-3">
+        "Dispatch Work" asks fragile:w1 to process the value — the echo comes
+        back via reply. "Dispatch Crash" asks fragile:w-crash to crash — after 3
+        retries the defect routes back to the runner.
+      </p>
+      {data.completed.length > 0 && (
+        <div className="mt-2">
+          <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">
+            Completed
+          </p>
+          {data.completed.map((c, i) => (
+            <div key={i} className="flex items-center gap-2 text-sm">
+              <span className="text-xs bg-emerald-900 text-emerald-300 px-2 py-0.5 rounded font-mono">
+                {c.job} → {c.echo}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {data.failed.length > 0 && (
+        <div className="mt-2">
+          <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">
+            Failed
+          </p>
+          {data.failed.map((f, i) => (
+            <div key={i} className="flex items-center gap-2 text-sm">
+              <span className="text-xs bg-red-900 text-red-300 px-2 py-0.5 rounded font-mono">
+                {f.job}: {f.error}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Transfer Saga ───────────────────────────────────────────────
+
+function TransferSagaDemo() {
+  const { send: sendSaga, peek: sagaPeek } = useActor(
+    transferSaga,
+    "demo-tx",
+  );
+  const { send: sendAlice, peek: alicePeek } = useActor(wallet, "saga-alice");
+  const { send: sendBob, peek: bobPeek } = useActor(wallet, "saga-bob");
+  const [amount, setAmount] = useState(25);
+
+  const saga = sagaPeek ?? {
+    phase: "init",
+    from: "",
+    to: "",
+    amount: 0,
+    failReason: undefined,
+  };
+  const aliceBalance = alicePeek?.balance ?? 0;
+  const bobBalance = bobPeek?.balance ?? 0;
+
+  const phaseColors: Record<string, string> = {
+    init: "bg-gray-700 text-gray-300",
+    withdrawing: "bg-amber-900 text-amber-300",
+    depositing: "bg-blue-900 text-blue-300",
+    done: "bg-emerald-900 text-emerald-300",
+    failed: "bg-red-900 text-red-300",
+  };
+
+  return (
+    <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-mono font-semibold text-gray-300">
+          transferSaga:demo-tx
+        </h3>
+        <span
+          className={`text-xs px-2 py-1 rounded font-mono ${phaseColors[saga.phase] ?? "bg-gray-700 text-gray-300"}`}
+        >
+          {saga.phase}
+          {saga.failReason ? `: ${saga.failReason}` : ""}
+        </span>
+      </div>
+
+      <div className="flex gap-4 mb-4">
+        <div className="flex-1 border border-gray-700 rounded-lg p-3 bg-gray-800">
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-mono text-sm text-gray-300">
+              wallet:saga-alice
+            </span>
+            <span className="font-bold tabular-nums">
+              ${aliceBalance.toFixed(2)}
+            </span>
+          </div>
+          <button
+            onClick={() => void sendAlice("deposit", { amount: 100 })}
+            className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
+          >
+            + $100
+          </button>
+        </div>
+        <div className="flex-1 border border-gray-700 rounded-lg p-3 bg-gray-800">
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-mono text-sm text-gray-300">
+              wallet:saga-bob
+            </span>
+            <span className="font-bold tabular-nums">
+              ${bobBalance.toFixed(2)}
+            </span>
+          </div>
+          <button
+            onClick={() => void sendBob("deposit", { amount: 100 })}
+            className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
+          >
+            + $100
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <span className="text-sm text-gray-400">Transfer</span>
+        <span className="text-sm text-gray-500">$</span>
+        <input
+          type="number"
+          value={amount}
+          onChange={(e) => setAmount(Math.max(1, Number(e.target.value) || 1))}
+          className="w-20 bg-gray-800 border border-gray-600 rounded px-3 py-2 text-center text-sm"
+          min={1}
+        />
+        <button
+          onClick={() =>
+            void sendSaga("start", {
+              from: "saga-alice",
+              to: "saga-bob",
+              amount,
+            })
+          }
+          className="px-3 py-2 bg-violet-700 hover:bg-violet-600 rounded text-sm font-medium transition-colors"
+        >
+          Alice → Bob (saga)
+        </button>
+        <button
+          onClick={() =>
+            void sendSaga("start", {
+              from: "saga-bob",
+              to: "saga-alice",
+              amount,
+            })
+          }
+          className="px-3 py-2 bg-violet-700 hover:bg-violet-600 rounded text-sm font-medium transition-colors"
+        >
+          Bob → Alice (saga)
+        </button>
+      </div>
+      <p className="text-xs text-gray-500 mt-3">
+        The saga asks wallet A to withdraw, waits for the reply, then asks wallet
+        B to deposit. Each step is a typed ask/reply. Try transferring more than
+        available — the saga catches the fail reply and stops.
+      </p>
     </div>
   );
 }

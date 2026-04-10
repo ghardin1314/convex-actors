@@ -3,7 +3,7 @@ import type { Id } from './_generated/dataModel.js'
 import { mutation, type MutationCtx } from './_generated/server.js'
 import { getOrCreateActorRow } from './actors.js'
 import { kickMailbox, type ExecuteFnHandle } from './kick.js'
-import { now } from './shared.js'
+import { now, vReplyTo } from './shared.js'
 
 /**
  * Single effect to apply: a message targeted at one `(actorType, name)`
@@ -17,6 +17,7 @@ export const vEffect = v.object({
   msgType: v.string(),
   payload: v.any(),
   deliverAt: v.number(),
+  replyTo: v.optional(vReplyTo),
 })
 
 const vEnqueueArgs = {
@@ -69,6 +70,12 @@ export async function enqueueMessageHandler(
     msgType: string
     payload: unknown
     deliverAt: number
+    replyTo?: {
+      actorType: string
+      name: string
+      handler: string
+      context: unknown
+    }
   }>,
   executeFn: ExecuteFnHandle,
 ): Promise<Array<Id<'messages'>>> {
@@ -112,6 +119,7 @@ export async function enqueueMessageHandler(
       payload: effect.payload,
       deliverAt: effect.deliverAt,
       sentAt,
+      replyTo: effect.replyTo,
     })
     await ctx.db.insert('pendingMessages', {
       messageId,

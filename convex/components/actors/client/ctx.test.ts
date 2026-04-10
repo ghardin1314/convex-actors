@@ -6,7 +6,7 @@ import {
   FailSentinel,
   type EffectDescriptor,
 } from "./ctx.js";
-import { defineActor, type AnyActorDefinition } from "./defineActor.js";
+import { defineActor, reply, type AnyActorDefinition } from "./defineActor.js";
 
 const T0 = 1_700_000_000_000;
 
@@ -40,7 +40,56 @@ const inbox = defineActor({
   },
 });
 
-const defs: Record<string, AnyActorDefinition> = { counter, inbox };
+const wallet = defineActor({
+  type: "wallet",
+  state: z.object({ balance: z.number() }),
+  messages: {
+    deposit: z.object({ amount: z.number() }),
+    withdraw: z.object({ amount: z.number() }),
+  },
+  returns: {
+    deposit: z.object({ newBalance: z.number() }),
+    withdraw: z.object({ newBalance: z.number() }),
+  },
+  initialState: () => ({ balance: 0 }),
+  handle: {
+    deposit: async (state, { amount }) => {
+      state.balance += amount;
+      return { newBalance: state.balance };
+    },
+    withdraw: async (state, { amount }, ctx) => {
+      if (amount > state.balance) ctx.fail("insufficient_funds");
+      state.balance -= amount;
+      return { newBalance: state.balance };
+    },
+  },
+});
+
+const saga = defineActor({
+  type: "saga",
+  state: z.object({ phase: z.string() }),
+  messages: {
+    start: z.object({ target: z.string(), amount: z.number() }),
+    withdrawResult: reply(wallet, "withdraw", {
+      context: z.object({ target: z.string() }),
+    }),
+  },
+  initialState: () => ({ phase: "init" }),
+  handle: {
+    start: async (state, { target, amount }, ctx) => {
+      state.phase = "withdrawing";
+      ctx.ask(wallet, target, "withdraw", { amount }, {
+        handler: "withdrawResult",
+        context: { target },
+      });
+    },
+    withdrawResult: async (state, { result }) => {
+      state.phase = result.kind === "success" ? "done" : "failed";
+    },
+  },
+});
+
+const defs: Record<string, AnyActorDefinition> = { counter, inbox, wallet, saga };
 
 function makeCtx(
   overrides?: Partial<Parameters<typeof createActorCtx>[0]>,
@@ -201,5 +250,113 @@ describe("ActorCtx", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (ctx as any).sendSelf("inc", { by: 1 });
     expect(internals.effects).toHaveLength(2);
+  });
+});
+
+describe("ask()", () => {
+  function makeSagaCtx(
+    overrides?: Partial<Parameters<typeof createActorCtx>[0]>,
+  ) {
+    return createActorCtx({
+      selfType: "saga",
+      selfName: "saga-1",
+      now: T0,
+      peekFn: async () => null,
+      getDefinition: (t) => {
+        const d = defs[t];
+        if (!d) throw new Error(`unknown type ${t}`);
+        return d;
+      },
+      ...overrides,
+    });
+  }
+
+  test("ask pushes an effect with replyTo metadata", () => {
+    const { ctx, internals } = makeSagaCtx();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (ctx as any).ask(wallet, "alice", "withdraw", { amount: 50 }, {
+      handler: "withdrawResult",
+      context: { target: "alice" },
+    });
+    expect(internals.effects).toHaveLength(1);
+    const effect = internals.effects[0];
+    expect(effect.actorType).toBe("wallet");
+    expect(effect.name).toBe("alice");
+    expect(effect.msgType).toBe("withdraw");
+    expect(effect.payload).toEqual({ amount: 50 });
+    expect(effect.deliverAt).toBe(T0);
+    expect(effect.replyTo).toEqual({
+      actorType: "saga",
+      name: "saga-1",
+      handler: "withdrawResult",
+      context: { target: "alice" },
+    });
+  });
+
+  test("ask without context sets replyTo.context to null", () => {
+    // Create a saga that uses reply without context
+    const simpleSaga = defineActor({
+      type: "simpleSaga",
+      state: z.object({ phase: z.string() }),
+      messages: {
+        go: z.object({}),
+        depositResult: reply(wallet, "deposit"),
+      },
+      initialState: () => ({ phase: "init" }),
+      handle: {
+        go: async () => {},
+        depositResult: async () => {},
+      },
+    });
+    const allDefs: Record<string, AnyActorDefinition> = { ...defs, simpleSaga };
+    const { ctx, internals } = createActorCtx({
+      selfType: "simpleSaga",
+      selfName: "s1",
+      now: T0,
+      peekFn: async () => null,
+      getDefinition: (t) => {
+        const d = allDefs[t];
+        if (!d) throw new Error(`unknown type ${t}`);
+        return d;
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (ctx as any).ask(wallet, "bob", "deposit", { amount: 10 }, {
+      handler: "depositResult",
+    });
+    expect(internals.effects[0].replyTo?.context).toBeNull();
+  });
+
+  test("ask validates target message payload", () => {
+    const { ctx } = makeSagaCtx();
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (ctx as any).ask(wallet, "alice", "withdraw", { amount: "bad" }, {
+        handler: "withdrawResult",
+        context: { target: "alice" },
+      }),
+    ).toThrow(/invalid payload/);
+  });
+
+  test("ask throws on unknown target msgType", () => {
+    const { ctx } = makeSagaCtx();
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (ctx as any).ask(wallet, "alice", "bogus", {}, {
+        handler: "withdrawResult",
+        context: { target: "alice" },
+      }),
+    ).toThrow(/unknown msgType "bogus"/);
+  });
+
+  test("ask throws on unknown reply handler", () => {
+    const { ctx } = makeSagaCtx();
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (ctx as any).ask(wallet, "alice", "withdraw", { amount: 10 }, {
+        handler: "nonexistent",
+        context: { target: "alice" },
+      }),
+    ).toThrow(/unknown reply handler "nonexistent"/);
   });
 });

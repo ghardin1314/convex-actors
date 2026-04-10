@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
-import { vDrainKind, vResponse } from './shared.js'
+import { vDrainKind, vReplyTo, vResponse } from './shared.js'
 
 export default defineSchema({
   actor: defineTable({
@@ -39,6 +39,9 @@ export default defineSchema({
     payload: v.any(),
     deliverAt: v.number(),
     sentAt: v.number(),
+    /** Present when the sender used `ctx.ask()` — routes the response
+     *  back to the asking actor as a new message. */
+    replyTo: v.optional(vReplyTo),
   }).index('by_actor', ['actorId']),
 
   pendingMessages: defineTable({

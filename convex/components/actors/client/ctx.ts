@@ -7,6 +7,17 @@ import type {
 // ── Effect descriptors ────────────────────────────────────────────
 
 /**
+ * Reply routing metadata. Stored on the message row so the drain loop
+ * can route the response back to the asking actor.
+ */
+export interface ReplyTo {
+  actorType: string;
+  name: string;
+  handler: string;
+  context: unknown;
+}
+
+/**
  * One pending side-effect: a message to be sent to an actor. Collected
  * during handler execution and applied atomically on success by the
  * drain wrapper. `sendSeq` is assigned at apply time (index in the
@@ -18,6 +29,8 @@ export interface EffectDescriptor {
   msgType: string;
   payload: unknown;
   deliverAt: number;
+  /** Present only for `ask()` — routes the response back to the caller. */
+  replyTo?: ReplyTo;
 }
 
 // ── FailSentinel ──────────────────────────────────────────────────
@@ -153,6 +166,43 @@ export function createActorCtx(
         msgType: String(msgType),
         payload: parsed.data,
         deliverAt: resolveDeliverAt(opts),
+      });
+    },
+
+    ask(def, name, msgType, payload, opts) {
+      if (!(msgType in def.messages)) {
+        throw new Error(
+          `ask: unknown msgType "${String(msgType)}" for actor type "${def.type}"`,
+        );
+      }
+      const schema = def.messages[String(msgType)];
+      const parsed = schema.safeParse(payload);
+      if (!parsed.success) {
+        throw new Error(
+          `ask: invalid payload for "${def.type}.${String(msgType)}": ${parsed.error.message}`,
+        );
+      }
+
+      const selfDef = args.getDefinition(args.selfType);
+      const handler = String(opts.handler);
+      if (!(handler in selfDef.messages)) {
+        throw new Error(
+          `ask: unknown reply handler "${handler}" on actor type "${args.selfType}"`,
+        );
+      }
+
+      effects.push({
+        actorType: def.type,
+        name,
+        msgType: String(msgType),
+        payload: parsed.data,
+        deliverAt: args.now,
+        replyTo: {
+          actorType: args.selfType,
+          name: args.selfName,
+          handler,
+          context: opts.context ?? null,
+        },
       });
     },
 

@@ -16,6 +16,51 @@ import { enqueueMessageHandler } from "./enqueue.js";
 import type { ExecuteFnHandle } from "./kick.js";
 import { MAX_ATTEMPTS, now, boundScheduledTime } from "./shared.js";
 
+/**
+ * After writing a response, check if the original message had a
+ * `replyTo` route and enqueue the reply to the asking actor.
+ */
+async function maybeRouteReply(
+  ctx: MutationCtx,
+  message: Doc<"messages">,
+  actor: Doc<"actor">,
+  outcome:
+    | { kind: "success"; value: unknown }
+    | { kind: "fail"; reason: string; details?: unknown }
+    | { kind: "defect"; error: string },
+  executeFn: string,
+) {
+  const rt = message.replyTo;
+  if (!rt) return;
+
+  let result: unknown;
+  if (outcome.kind === "success") {
+    result = { kind: "success", value: outcome.value };
+  } else if (outcome.kind === "fail") {
+    result = { kind: "fail", reason: outcome.reason, details: outcome.details };
+  } else {
+    result = { kind: "defect", error: outcome.error };
+  }
+
+  await enqueueMessageHandler(
+    ctx,
+    [
+      {
+        actorType: rt.actorType,
+        name: rt.name,
+        msgType: rt.handler,
+        payload: {
+          result,
+          context: rt.context ?? null,
+          from: { type: actor.actorType, name: actor.name },
+        },
+        deliverAt: now(),
+      },
+    ],
+    executeFn as ExecuteFnHandle,
+  );
+}
+
 /** Flat drain fields that get patched onto `mailboxState`. */
 type DrainPatch = Pick<
   Doc<"mailboxState">,
@@ -146,15 +191,17 @@ export const drainLoop = internalMutation({
 
     // ── Attempts guard ──────────────────────────────────────
     if (pending.attempts >= MAX_ATTEMPTS) {
+      const defectError = `handler exhausted ${pending.attempts} attempts`;
       await ctx.db.insert("responses", {
         messageId: message._id,
         actorId: args.actorId,
         response: {
           kind: "defect",
-          error: `handler exhausted ${pending.attempts} attempts`,
+          error: defectError,
           attempts: pending.attempts,
         },
       });
+      await maybeRouteReply(ctx, message, actor, { kind: "defect", error: defectError }, args.executeFn);
       await ctx.db.delete(pending._id);
       drain = await handleTransition(ctx, args.actorId, generation, args.executeFn);
       await ctx.db.patch(mailbox._id, { generation, ...drain });
@@ -190,6 +237,7 @@ export const drainLoop = internalMutation({
         actorId: args.actorId,
         response: { kind: "success", value: result.response },
       });
+      await maybeRouteReply(ctx, message, actor, { kind: "success", value: result.response }, args.executeFn);
       await ctx.db.delete(pending._id);
     } else if (result.outcome === "fail") {
       await ctx.db.insert("responses", {
@@ -201,6 +249,7 @@ export const drainLoop = internalMutation({
           details: result.details,
         },
       });
+      await maybeRouteReply(ctx, message, actor, { kind: "fail", reason: result.reason, details: result.details }, args.executeFn);
       await ctx.db.delete(pending._id);
     } else {
       const newAttempts = pending.attempts + 1;
@@ -214,6 +263,7 @@ export const drainLoop = internalMutation({
             attempts: newAttempts,
           },
         });
+        await maybeRouteReply(ctx, message, actor, { kind: "defect", error: result.error }, args.executeFn);
         await ctx.db.delete(pending._id);
       } else {
         await ctx.db.patch(pending._id, { attempts: newAttempts });

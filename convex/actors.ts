@@ -1,13 +1,13 @@
-import { z } from "zod";
-import { components } from "./_generated/api";
-import { makeExecute } from "./components/actors/client/execute";
-import { ActorSystem } from "./components/actors/client/system";
-import { defineActor } from "./components/actors/client/defineActor";
+import { z } from 'zod'
+import { components } from './_generated/api'
+import { defineActor, reply } from './components/actors/client/defineActor'
+import { makeExecute } from './components/actors/client/execute'
+import { ActorSystem } from './components/actors/client/system'
 
 // ── Actor definitions ───────────────────────────────────────────
 
 export const counter = defineActor({
-  type: "counter",
+  type: 'counter',
   state: z.object({ count: z.number() }),
   messages: {
     inc: z.object({ by: z.number() }),
@@ -18,19 +18,22 @@ export const counter = defineActor({
   project: (state) => ({ count: state.count }),
   handle: {
     inc: async (state, { by }) => {
-      state.count += by;
+      state.count += by
     },
     dec: async (state, { by }) => {
-      state.count -= by;
+      state.count -= by
     },
     reset: async (state) => {
-      state.count = 0;
+      state.count = 0
     },
   },
-});
+})
+
+// Extracted so wallet can self-reference its own return type in reply()
+const walletBalanceReturn = z.object({ newBalance: z.number() })
 
 export const wallet = defineActor({
-  type: "wallet",
+  type: 'wallet',
   state: z.object({
     balance: z.number(),
     log: z.array(z.string()),
@@ -39,72 +42,198 @@ export const wallet = defineActor({
     deposit: z.object({ amount: z.number() }),
     withdraw: z.object({ amount: z.number() }),
     transfer: z.object({ to: z.string(), amount: z.number() }),
+    // Reply handler: receives deposit confirmation from the target wallet.
+    // Uses reply(schema, opts) overload since wallet references itself.
+    transferDepositResult: reply(walletBalanceReturn, {
+      context: z.object({ to: z.string(), amount: z.number() }),
+    }),
+  },
+  returns: {
+    deposit: walletBalanceReturn,
+    withdraw: walletBalanceReturn,
+    transfer: walletBalanceReturn,
   },
   initialState: () => ({ balance: 0, log: [] }),
   project: (state) => ({ balance: state.balance, log: state.log }),
   handle: {
     deposit: async (state, { amount }) => {
-      state.balance += amount;
-      state.log = [...state.log.slice(-9), `+$${amount} (balance: $${state.balance})`];
-      return { newBalance: state.balance };
+      state.balance += amount
+      state.log = [
+        ...state.log.slice(-9),
+        `+$${amount} (balance: $${state.balance})`,
+      ]
+      return { newBalance: state.balance }
     },
     withdraw: async (state, { amount }, ctx) => {
       if (amount > state.balance) {
-        ctx.fail("insufficient_funds", {
+        ctx.fail('insufficient_funds', {
           requested: amount,
           available: state.balance,
-        });
+        })
       }
-      state.balance -= amount;
-      state.log = [...state.log.slice(-9), `-$${amount} (balance: $${state.balance})`];
-      return { newBalance: state.balance };
+      state.balance -= amount
+      state.log = [
+        ...state.log.slice(-9),
+        `-$${amount} (balance: $${state.balance})`,
+      ]
+      return { newBalance: state.balance }
     },
     transfer: async (state, { to, amount }, ctx) => {
-      // Atomic: balance check + debit + send deposit all in one handler.
-      // No TOCTOU race because the wallet processes messages sequentially.
       if (amount > state.balance) {
         state.log = [
           ...state.log.slice(-9),
           `REJECTED transfer $${amount} -> ${to} (balance: $${state.balance})`,
-        ];
-        ctx.fail("insufficient_funds", {
+        ]
+        ctx.fail('insufficient_funds', {
           requested: amount,
           available: state.balance,
-        });
+        })
       }
-      state.balance -= amount;
-      ctx.stub(wallet, to).send("deposit", { amount });
+      state.balance -= amount
+      // Ask the target wallet to deposit — the response routes back to
+      // transferDepositResult on *this* wallet instance.
+      ctx.ask(
+        wallet,
+        to,
+        'deposit',
+        { amount },
+        {
+          handler: 'transferDepositResult',
+          context: { to, amount },
+        },
+      )
       state.log = [
         ...state.log.slice(-9),
-        `transferred $${amount} -> ${to} (balance: $${state.balance})`,
-      ];
-      return { newBalance: state.balance };
+        `transfer $${amount} -> ${to} pending (balance: $${state.balance})`,
+      ]
+      return { newBalance: state.balance }
+    },
+    transferDepositResult: async (state, { result, context }) => {
+      if (result.kind === 'success') {
+        state.log = [
+          ...state.log.slice(-9),
+          `transfer $${context.amount} -> ${context.to} confirmed (recipient balance: $${result.value.newBalance})`,
+        ]
+      } else {
+        // Compensate: re-credit the amount since the deposit failed
+        state.balance += context.amount
+        const reason = result.kind === 'fail' ? result.reason : result.error
+        state.log = [
+          ...state.log.slice(-9),
+          `transfer $${context.amount} -> ${context.to} FAILED: ${reason} (refunded, balance: $${state.balance})`,
+        ]
+      }
     },
   },
-});
+})
 
 export const fragile = defineActor({
-  type: "fragile",
+  type: 'fragile',
   state: z.object({ processed: z.number() }),
   messages: {
     work: z.object({ value: z.string() }),
     crash: z.object({}),
   },
+  returns: {
+    work: z.object({ echo: z.string() }),
+  },
   initialState: () => ({ processed: 0 }),
   project: (state) => ({ processed: state.processed }),
   handle: {
     work: async (state, { value }) => {
-      state.processed++;
-      return { echo: value };
+      state.processed++
+      return { echo: value }
     },
     crash: async () => {
-      throw new Error("unexpected internal failure");
+      throw new Error('unexpected internal failure')
     },
   },
-});
+})
+
+/**
+ * Dispatches jobs to fragile workers via ask/reply. Demonstrates:
+ * - ask from a regular actor (not a saga)
+ * - handling success replies (work completed)
+ * - handling defect replies (worker crashed after max retries)
+ * - context carry-through to correlate replies with jobs
+ */
+export const jobRunner = defineActor({
+  type: 'jobRunner',
+  state: z.object({
+    pending: z.number(),
+    completed: z.array(z.object({ job: z.string(), echo: z.string() })),
+    failed: z.array(z.object({ job: z.string(), error: z.string() })),
+  }),
+  messages: {
+    dispatch: z.object({ worker: z.string(), value: z.string() }),
+    dispatchCrash: z.object({ worker: z.string() }),
+    workResult: reply(fragile, 'work', {
+      context: z.object({ job: z.string() }),
+    }),
+    crashResult: reply(z.unknown(), {
+      context: z.object({ job: z.string() }),
+    }),
+  },
+  initialState: () => ({ pending: 0, completed: [], failed: [] }),
+  project: (state) => ({
+    pending: state.pending,
+    completed: state.completed,
+    failed: state.failed,
+  }),
+  handle: {
+    dispatch: async (state, { worker, value }, ctx) => {
+      state.pending++
+      ctx.ask(
+        fragile,
+        worker,
+        'work',
+        { value },
+        {
+          handler: 'workResult',
+          context: { job: value },
+        },
+      )
+    },
+    dispatchCrash: async (state, { worker }, ctx) => {
+      state.pending++
+      ctx.ask(
+        fragile,
+        worker,
+        'crash',
+        {},
+        {
+          handler: 'crashResult',
+          context: { job: `crash-${worker}` },
+        },
+      )
+    },
+    workResult: async (state, { result, context }) => {
+      state.pending--
+      if (result.kind === 'success') {
+        state.completed = [
+          ...state.completed,
+          { job: context.job, echo: result.value.echo },
+        ]
+      } else {
+        const error = result.kind === 'fail' ? result.reason : result.error
+        state.failed = [...state.failed, { job: context.job, error }]
+      }
+    },
+    crashResult: async (state, { result, context }) => {
+      state.pending--
+      const error =
+        result.kind === 'success'
+          ? 'unexpected success'
+          : result.kind === 'fail'
+            ? result.reason
+            : result.error
+      state.failed = [...state.failed, { job: context.job, error }]
+    },
+  },
+})
 
 export const pingPong = defineActor({
-  type: "pingPong",
+  type: 'pingPong',
   state: z.object({ hits: z.number(), log: z.array(z.string()) }),
   messages: {
     serve: z.object({ to: z.string(), rallies: z.number() }),
@@ -115,40 +244,40 @@ export const pingPong = defineActor({
   project: (state) => ({ hits: state.hits, log: state.log }),
   handle: {
     serve: async (state, { to, rallies }, ctx) => {
-      const self = ctx.self();
-      state.hits = 0;
-      state.log = [`serving to ${to} (${rallies} rallies)`];
-      ctx.stub(pingPong, to).send("reset", {});
-      ctx.stub(pingPong, to).send("hit", {
+      const self = ctx.self()
+      state.hits = 0
+      state.log = [`serving to ${to} (${rallies} rallies)`]
+      ctx.stub(pingPong, to).send('reset', {})
+      ctx.stub(pingPong, to).send('hit', {
         from: self.name,
         ralliesLeft: rallies - 1,
-      });
+      })
     },
     reset: async (state) => {
-      state.hits = 0;
-      state.log = [];
+      state.hits = 0
+      state.log = []
     },
     hit: async (state, { from, ralliesLeft }, ctx) => {
-      const self = ctx.self();
-      state.hits++;
+      const self = ctx.self()
+      state.hits++
       const action =
         ralliesLeft > 0
           ? `${from} -> ${self.name} -> ${from}`
-          : `${from} -> ${self.name} (end)`;
-      state.log = [...state.log.slice(-9), `#${state.hits} ${action}`];
+          : `${from} -> ${self.name} (end)`
+      state.log = [...state.log.slice(-9), `#${state.hits} ${action}`]
 
       if (ralliesLeft > 0) {
-        ctx.stub(pingPong, from).send("hit", {
+        ctx.stub(pingPong, from).send('hit', {
           from: self.name,
           ralliesLeft: ralliesLeft - 1,
-        });
+        })
       }
     },
   },
-});
+})
 
 export const countdown = defineActor({
-  type: "countdown",
+  type: 'countdown',
   state: z.object({
     remaining: z.number(),
     running: z.boolean(),
@@ -166,36 +295,31 @@ export const countdown = defineActor({
   }),
   handle: {
     start: async (state, { from, intervalMs }, ctx) => {
-      state.remaining = from;
-      state.running = true;
-      state.log = [`started at ${from}`];
-      ctx.sendSelf("tick", { intervalMs }, { after: intervalMs });
+      state.remaining = from
+      state.running = true
+      state.log = [`started at ${from}`]
+      ctx.sendSelf('tick', { intervalMs }, { after: intervalMs })
     },
     tick: async (state, { intervalMs }, ctx) => {
-      if (!state.running) return;
-      state.remaining--;
-      state.log = [
-        ...state.log.slice(-9),
-        `tick -> ${state.remaining}`,
-      ];
+      if (!state.running) return
+      state.remaining--
+      state.log = [...state.log.slice(-9), `tick -> ${state.remaining}`]
       if (state.remaining <= 0) {
-        state.running = false;
-        state.log = [...state.log.slice(-9), "done!"];
+        state.running = false
+        state.log = [...state.log.slice(-9), 'done!']
       } else {
-        ctx.sendSelf("tick", { intervalMs }, { after: intervalMs });
+        ctx.sendSelf('tick', { intervalMs }, { after: intervalMs })
       }
     },
   },
-});
+})
 
-const LEADERBOARD_COUNTERS = ["alice", "bob", "charlie"];
+const LEADERBOARD_COUNTERS = ['alice', 'bob', 'charlie']
 
 export const leaderboard = defineActor({
-  type: "leaderboard",
+  type: 'leaderboard',
   state: z.object({
-    rankings: z.array(
-      z.object({ name: z.string(), count: z.number() }),
-    ),
+    rankings: z.array(z.object({ name: z.string(), count: z.number() })),
     lastRefresh: z.number().optional(),
   }),
   messages: {
@@ -208,21 +332,115 @@ export const leaderboard = defineActor({
   }),
   handle: {
     refresh: async (state, _payload, ctx) => {
-      const entries: { name: string; count: number }[] = [];
+      const entries: { name: string; count: number }[] = []
       for (const name of LEADERBOARD_COUNTERS) {
-        const projection = await ctx.stub(counter, name).peek();
-        entries.push({ name, count: projection?.count ?? 0 });
+        const projection = await ctx.stub(counter, name).peek()
+        entries.push({ name, count: projection?.count ?? 0 })
       }
-      entries.sort((a, b) => b.count - a.count);
-      state.rankings = entries;
-      state.lastRefresh = ctx.now();
+      entries.sort((a, b) => b.count - a.count)
+      state.rankings = entries
+      state.lastRefresh = ctx.now()
     },
   },
-});
+})
+
+// ── Saga demo: orchestrated transfer via ask/reply ──────────────
+
+export const transferSaga = defineActor({
+  type: 'transferSaga',
+  state: z.object({
+    phase: z.enum(['init', 'withdrawing', 'depositing', 'done', 'failed']),
+    from: z.string(),
+    to: z.string(),
+    amount: z.number(),
+    failReason: z.string().optional(),
+  }),
+  messages: {
+    start: z.object({
+      from: z.string(),
+      to: z.string(),
+      amount: z.number(),
+    }),
+    withdrawResult: reply(wallet, 'withdraw', {
+      context: z.object({ to: z.string(), amount: z.number() }),
+    }),
+    depositResult: reply(wallet, 'deposit'),
+  },
+  returns: {
+    start: z.object({ phase: z.string() }),
+  },
+  initialState: () => ({
+    phase: 'init' as const,
+    from: '',
+    to: '',
+    amount: 0,
+  }),
+  project: (state) => ({
+    phase: state.phase,
+    from: state.from,
+    to: state.to,
+    amount: state.amount,
+    failReason: state.failReason,
+  }),
+  handle: {
+    start: async (state, { from, to, amount }, ctx) => {
+      state.phase = 'withdrawing'
+      state.from = from
+      state.to = to
+      state.amount = amount
+      ctx.ask(
+        wallet,
+        from,
+        'withdraw',
+        { amount },
+        {
+          handler: 'withdrawResult',
+          context: { to, amount },
+        },
+      )
+      return { phase: state.phase }
+    },
+    withdrawResult: async (state, { result, context }, ctx) => {
+      if (result.kind === 'success') {
+        state.phase = 'depositing'
+        ctx.ask(
+          wallet,
+          context.to,
+          'deposit',
+          { amount: context.amount },
+          {
+            handler: 'depositResult',
+          },
+        )
+      } else {
+        state.phase = 'failed'
+        state.failReason = result.kind === 'fail' ? result.reason : result.error
+      }
+    },
+    depositResult: async (state, { result }) => {
+      if (result.kind === 'success') {
+        state.phase = 'done'
+      } else {
+        state.phase = 'failed'
+        state.failReason = result.kind === 'fail' ? result.reason : result.error
+        // In a real saga we'd compensate by re-depositing to the source
+      }
+    },
+  },
+})
 
 // ── Wire-up ─────────────────────────────────────────────────────
 
-const defs = { counter, wallet, fragile, pingPong, countdown, leaderboard };
+const defs = {
+  counter,
+  wallet,
+  fragile,
+  jobRunner,
+  pingPong,
+  countdown,
+  leaderboard,
+  transferSaga,
+}
 
-export const execute = makeExecute(defs, components.actors);
-export const system = new ActorSystem(components.actors, defs);
+export const execute = makeExecute(defs, components.actors)
+export const system = new ActorSystem(components.actors, defs)
