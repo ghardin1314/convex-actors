@@ -1,5 +1,6 @@
 import {
   HeadContent,
+  Link,
   Outlet,
   Scripts,
   createRootRouteWithContext,
@@ -66,9 +67,39 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <HeadContent />
       </head>
       <body>
+        <TopNav />
         {children}
         <Scripts />
       </body>
     </html>
+  )
+}
+
+function TopNav() {
+  return (
+    <nav className="bg-gray-950 border-b border-gray-800 text-gray-300 text-sm">
+      <div className="max-w-5xl mx-auto px-4 h-10 flex items-center gap-5">
+        <span className="font-mono font-semibold text-gray-200">
+          convex-actors
+        </span>
+        <div className="flex items-center gap-4">
+          <Link
+            to="/"
+            className="hover:text-gray-100"
+            activeOptions={{ exact: true }}
+            activeProps={{ className: 'text-emerald-300 font-semibold' }}
+          >
+            framework demos
+          </Link>
+          <Link
+            to="/auctions"
+            className="hover:text-gray-100"
+            activeProps={{ className: 'text-emerald-300 font-semibold' }}
+          >
+            auction house
+          </Link>
+        </div>
+      </div>
+    </nav>
   )
 }

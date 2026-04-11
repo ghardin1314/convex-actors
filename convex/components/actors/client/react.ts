@@ -12,6 +12,7 @@
  *   send("inc", { by: 1 })  // typechecked msg + payload
  */
 import { useCallback } from "react";
+import type { ConvexReactClient } from "convex/react";
 import { useMutation } from "convex/react";
 import { useQuery } from "@tanstack/react-query";
 import { convexQuery } from "@convex-dev/react-query";
@@ -20,6 +21,7 @@ import type {
   AnyActorDefinition,
   MessageNamesOf,
   ProjectionOf,
+  ReturnOf,
 } from "./defineActor";
 import type { z } from "zod";
 
@@ -54,8 +56,15 @@ export interface ActorApi {
   >;
 }
 
-export type ActorResponse =
-  | { kind: "success"; value: unknown }
+/**
+ * Shape of the `response` field in a committed message-response row.
+ * Generic over the success `value` so a typed awaiter can narrow it
+ * to the handler's declared return type; defaults to `unknown` for
+ * the generic `useActorResponse` hook, which is keyed only by a bare
+ * `messageId` and has no static handle on the source handler.
+ */
+export type ActorResponse<T = unknown> =
+  | { kind: "success"; value: T }
   | { kind: "fail"; reason: string; details?: unknown }
   | { kind: "defect"; error: string; attempts: number };
 
@@ -132,4 +141,97 @@ export function createActorHooks(actorApi: ActorApi) {
   }
 
   return { useActor, useActorResponse };
+}
+
+// ── Typed response awaiter ─────────────────────────────────────────
+
+/**
+ * Shape of a public `getResponse` query wrapper. Each app exposes its
+ * own wrapper around `system.getResponse`:
+ *
+ *   export const getResponse = query({
+ *     args: { messageId: v.string() },
+ *     handler: async (ctx, { messageId }) =>
+ *       await system.getResponse(ctx, { messageId }),
+ *   });
+ *
+ * Pass that reference to `createResponseAwaiter` to get a typed
+ * awaiter bound to it.
+ */
+export type GetResponseQueryRef = FunctionReference<
+  "query",
+  "public",
+  { messageId: string },
+  { messageId: string; response: ActorResponse } | null
+>;
+
+/** Envelope returned by an awaiter, with the success value narrowed. */
+export type TypedResponseEnvelope<T> = {
+  messageId: string;
+  response: ActorResponse<T>;
+};
+
+/**
+ * Bind a public `getResponse` query wrapper into an imperative
+ * response awaiter. Intended for use inside a tanstack-query
+ * `mutationFn` (or anywhere else that already holds a `ConvexReactClient`)
+ * to fire-then-wait for a specific handler's reply.
+ *
+ * Call once at module scope:
+ *
+ *   const awaitMessageResponse = createResponseAwaiter(api.auctions.getResponse)
+ *
+ * Call per message, with both type arguments explicit:
+ *
+ *   const row = await awaitMessageResponse<typeof auctionHouse, 'createAuction'>(
+ *     convex, messageId,
+ *   )
+ *   if (row.response.kind === 'success') {
+ *     row.response.value.auctionName // ← typed, no cast
+ *   }
+ *
+ * Both generics are required because TypeScript does not support
+ * partial type-argument inference (microsoft/TypeScript#26242) —
+ * specifying only `D` would force `M` to fall back to its constraint
+ * and collapse `ReturnOf<D, M>` to the union of every handler on the
+ * actor. The actor definition should be imported *type-only* so its
+ * handler code never bundles into the client.
+ *
+ * The single unavoidable cast lives on the resolve line of this
+ * function. Narrowing is trust-me, not runtime-validated: running the
+ * actor's zod `response` schema would require a value import of the
+ * actor module, and handlers may transitively reference server-only
+ * code. The drain already produces values matching the handler's
+ * signature; a drift there is a server bug, not a UI concern.
+ */
+export function createResponseAwaiter(getResponseQuery: GetResponseQueryRef) {
+  return <
+    D extends AnyActorDefinition,
+    M extends MessageNamesOf<D>,
+  >(
+    convex: ConvexReactClient,
+    messageId: string,
+  ): Promise<TypedResponseEnvelope<ReturnOf<D, M>>> => {
+    return new Promise((resolve, reject) => {
+      const watch = convex.watchQuery(getResponseQuery, { messageId });
+      let unsubscribe: (() => void) | null = null;
+      const check = () => {
+        try {
+          const value = watch.localQueryResult();
+          if (value !== null && value !== undefined) {
+            unsubscribe?.();
+            resolve(value as TypedResponseEnvelope<ReturnOf<D, M>>);
+          }
+        } catch (err) {
+          unsubscribe?.();
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      };
+      // The watch may already have a cached result from an earlier
+      // subscription — check immediately, otherwise we'd wait for a
+      // fresh update that may never come.
+      unsubscribe = watch.onUpdate(check);
+      check();
+    });
+  };
 }

@@ -262,6 +262,14 @@ export const auction = defineActor({
       // initializing / settling / sold / expired / settlement_failed:
       // no live countdown — leave both null.
     }
+    // Same formula the `bid` handler uses to reject `bid_too_low`. Exposing
+    // it on the projection lets the UI seed each bidder's input with the
+    // smallest legal bid (starting price before any bids, then
+    // currentBid + minIncrement after that).
+    const minNextBid =
+      state.currentBid !== null
+        ? state.currentBid.amount + state.config.minIncrement
+        : state.startingPrice
     return {
       phase: state.phase,
       item: state.item,
@@ -272,6 +280,9 @@ export const auction = defineActor({
           }
         : null,
       previousBids: state.previousBids,
+      startingPrice: state.startingPrice,
+      minIncrement: state.config.minIncrement,
+      minNextBid,
       phaseStartedAt: state.phaseStartedAt,
       /** When the current phase's timer will fire (next transition). */
       phaseEndsAt,
