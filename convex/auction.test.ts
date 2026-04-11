@@ -109,7 +109,6 @@ describe("account", () => {
     expect(state).toEqual({
       balance: 100,
       availableBalance: 100,
-      displayName: "",
     });
   });
 

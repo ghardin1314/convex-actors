@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { components } from './_generated/api'
-import { account, auction } from './auctionActors'
+import { account, auction, userBids } from './auctionActors'
 import { auctionHouse } from './auctionHouse'
 import { bidSaga, settlementSaga } from './auctionSagas'
 import { defineActor, reply } from './components/actors/client/defineActor'
@@ -453,6 +453,7 @@ const defs = {
   multiTransfer,
   account,
   auction,
+  userBids,
   auctionHouse,
   bidSaga,
   settlementSaga,

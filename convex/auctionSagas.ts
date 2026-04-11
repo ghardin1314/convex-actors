@@ -20,9 +20,19 @@ import { defineSaga } from './components/actors/client/defineSaga'
 // Cyclic import with auctionActors (both sagas send back to auction and
 // account). ESM handles the cycle — values are only read inside step
 // callbacks, not at module evaluation time.
-import { account, auction } from './auctionActors'
+import { account, auction, userBids } from './auctionActors'
 
 // ── bidSaga ──────────────────────────────────────────────────────
+
+/**
+ * The saga owns its own hold id — there's exactly one hold per bid
+ * attempt, and the saga name (bid idempotency key) already uniquely
+ * identifies that attempt, so `hold-${sagaName}` is a clean
+ * deterministic derivation. Callers only need to supply the
+ * idempotency key as the saga name; the holdId is a private
+ * implementation detail.
+ */
+const holdIdForSaga = (sagaName: string) => `hold-${sagaName}`
 
 export const bidSaga = defineSaga({
   type: 'bidSaga',
@@ -30,18 +40,26 @@ export const bidSaga = defineSaga({
     bidder: z.string(),
     auctionName: z.string(),
     amount: z.number(),
-    holdId: z.string(),
   }),
   context: z.object({}),
   initialContext: () => ({}),
   firstStep: 'holdFunds',
   steps: {
     holdFunds: {
-      run: (input, _context, ctx) =>
-        ctx.ask(account, input.bidder, 'hold', {
-          holdId: input.holdId,
+      run: (input, _context, ctx) => {
+        // Fire-and-forget: append this bid to the bidder's index so
+        // `auctions.listUserBids` can find it. `append` is idempotent
+        // on `idempotencyKey`, so saga retries are safe.
+        ctx.stub(userBids, input.bidder).send('append', {
+          idempotencyKey: ctx.self().name,
+          auctionName: input.auctionName,
           amount: input.amount,
-        }),
+        })
+        return ctx.ask(account, input.bidder, 'hold', {
+          holdId: holdIdForSaga(ctx.self().name),
+          amount: input.amount,
+        })
+      },
       onSuccess: (_value, _input, context) => ({
         context,
         next: 'placeBid',
@@ -51,7 +69,7 @@ export const bidSaga = defineSaga({
       // fails with no compensation needed.
       compensate: (input, _context, ctx) => {
         ctx.stub(account, input.bidder).send('releaseHold', {
-          holdId: input.holdId,
+          holdId: holdIdForSaga(ctx.self().name),
         })
       },
     },
@@ -60,7 +78,7 @@ export const bidSaga = defineSaga({
         ctx.ask(auction, input.auctionName, 'bid', {
           bidder: input.bidder,
           amount: input.amount,
-          holdId: input.holdId,
+          holdId: holdIdForSaga(ctx.self().name),
         }),
       onSuccess: () => ({ next: null }),
       // No compensate on the final step — nothing to undo at this level.

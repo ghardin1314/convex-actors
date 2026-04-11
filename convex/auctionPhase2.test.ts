@@ -315,7 +315,6 @@ describe("bidSaga: hold → bid flow", () => {
       bidder: "alice",
       auctionName: "auction-1",
       amount: 50,
-      holdId: "bid-1-hold",
     });
     await drain(t);
 
@@ -351,7 +350,6 @@ describe("bidSaga: hold → bid flow", () => {
       bidder: "alice",
       auctionName: "auction-1",
       amount: 100,
-      holdId: "alice-h1",
     });
     await drain(t);
 
@@ -361,7 +359,6 @@ describe("bidSaga: hold → bid flow", () => {
       bidder: "bob",
       auctionName: "auction-1",
       amount: 105,
-      holdId: "bob-h1",
     });
     await drain(t);
 
@@ -403,7 +400,6 @@ describe("bidSaga: hold → bid flow", () => {
       bidder: "poor",
       auctionName: "auction-1",
       amount: 50,
-      holdId: "poor-h1",
     });
     await drain(t);
 
@@ -445,7 +441,6 @@ describe("settlementSaga: settle → payout → notify", () => {
       bidder: "alice",
       auctionName: "auction-1",
       amount: 100,
-      holdId: "bid-1-hold",
     });
     await drain(t);
 
@@ -540,7 +535,6 @@ describe("end-to-end auction lifecycle via supervisor + sagas", () => {
       bidder: "bob",
       auctionName: "auction-1",
       amount: 50,
-      holdId: "bob-bid-1-hold",
     });
     await drain(t);
 
@@ -549,7 +543,6 @@ describe("end-to-end auction lifecycle via supervisor + sagas", () => {
       bidder: "alice",
       auctionName: "auction-1",
       amount: 60,
-      holdId: "alice-bid-1-hold",
     });
     await drain(t);
 

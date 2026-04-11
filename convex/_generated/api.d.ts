@@ -13,6 +13,7 @@ import type * as actors from "../actors.js";
 import type * as auctionActors from "../auctionActors.js";
 import type * as auctionHouse from "../auctionHouse.js";
 import type * as auctionSagas from "../auctionSagas.js";
+import type * as auctions from "../auctions.js";
 import type * as myFunctions from "../myFunctions.js";
 
 import type {
@@ -27,6 +28,7 @@ declare const fullApi: ApiFromModules<{
   auctionActors: typeof auctionActors;
   auctionHouse: typeof auctionHouse;
   auctionSagas: typeof auctionSagas;
+  auctions: typeof auctions;
   myFunctions: typeof myFunctions;
 }>;
 
