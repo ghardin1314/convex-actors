@@ -110,6 +110,7 @@ type SagaProjection = {
   phase: "idle" | "running" | "completed" | "failed";
   currentStep: string | null;
   completedSteps: string[];
+  failedStep: string | null;
   failReason: string | undefined;
 };
 

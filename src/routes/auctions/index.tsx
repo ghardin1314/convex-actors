@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useAuctionsList, useCreateAuction } from '../../lib/auctionsHooks'
 import { SELLER } from '../../lib/demoUsers'
 import { PhaseBadge, CountdownDisplay } from './-ui'
@@ -60,7 +60,7 @@ function AuctionLobby() {
 }
 
 function CreateAuctionForm() {
-  const { createAuction, outcome, reset } = useCreateAuction()
+  const create = useCreateAuction()
   const navigate = useNavigate()
   const [title, setTitle] = useState('Rare Coin')
   const [description, setDescription] = useState(
@@ -71,38 +71,37 @@ function CreateAuctionForm() {
   )
   const [startingPrice, setStartingPrice] = useState(10)
 
-  // Auto-navigate to the newly created auction once the mutation
-  // resolves with the supervisor-allocated name.
-  useEffect(() => {
-    if (outcome.kind === 'done') {
-      void navigate({
-        to: '/auctions/$name',
-        params: { name: outcome.value },
-      })
-      reset()
-    }
-  }, [outcome, navigate, reset])
-
   const onCreate = () =>
-    createAuction({
-      user: SELLER,
-      item: { title, description, imageUrl },
-      startingPrice,
-      config: {
-        durationMs: 30_000,
-        goingOnceMs: 10_000,
-        goingTwiceMs: 10_000,
-        minIncrement: 1,
+    create.mutate(
+      {
+        user: SELLER,
+        item: { title, description, imageUrl },
+        startingPrice,
+        config: {
+          durationMs: 30_000,
+          goingOnceMs: 10_000,
+          goingTwiceMs: 5_000,
+          minIncrement: 1,
+        },
       },
-    })
+      {
+        onSuccess: (data) => {
+          if (data.ok) {
+            void navigate({
+              to: '/auctions/$name',
+              params: { name: data.name },
+            })
+          }
+        },
+      },
+    )
 
-  const busy = outcome.kind === 'pending'
-  const errorMessage =
-    outcome.kind === 'error'
-      ? outcome.message
-      : outcome.kind === 'failed'
-        ? outcome.reason
-        : null
+  const busy = create.isPending
+  const errorMessage = create.isError
+    ? create.error.message
+    : create.data && !create.data.ok
+      ? create.data.reason
+      : null
 
   return (
     <details className="border border-gray-800 rounded-lg bg-gray-900">

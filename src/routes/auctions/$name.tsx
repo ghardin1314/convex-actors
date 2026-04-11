@@ -374,8 +374,8 @@ function BidderCard({
   biddable: boolean
 }) {
   const { data: account } = useAccount(bidder)
-  const { deposit, outcome: depositOutcome } = useDeposit()
-  const { placeBid, outcome: bidOutcome } = usePlaceBid()
+  const deposit = useDeposit()
+  const bid = usePlaceBid()
 
   const [bidAmount, setBidAmount] = useState<number>(auction.minNextBid)
 
@@ -398,19 +398,18 @@ function BidderCard({
   const isWinning = auction.currentBid?.bidder === bidder
   const belowMin = bidAmount < auction.minNextBid
 
-  const bidBusy = bidOutcome.kind === 'pending'
-  const depositBusy = depositOutcome.kind === 'pending'
+  const bidBusy = bid.isPending
+  const depositBusy = deposit.isPending
 
-  const bidMessage =
-    bidOutcome.kind === 'pending'
-      ? { tone: 'muted', text: 'bid saga running…' }
-      : bidOutcome.kind === 'done'
+  const bidMessage = bid.isPending
+    ? { tone: 'muted', text: 'placing bid…' }
+    : bid.isError
+      ? { tone: 'bad', text: bid.error.message }
+      : bid.data?.ok
         ? { tone: 'good', text: 'bid accepted ✓' }
-        : bidOutcome.kind === 'failed'
-          ? { tone: 'warn', text: `bid failed: ${bidOutcome.reason}` }
-          : bidOutcome.kind === 'error'
-            ? { tone: 'bad', text: bidOutcome.message }
-            : null
+        : bid.data
+          ? { tone: 'warn', text: `bid failed: ${bid.data.reason}` }
+          : null
 
   return (
     <div
@@ -456,7 +455,7 @@ function BidderCard({
       <button
         disabled={depositBusy}
         onClick={() =>
-          void deposit({ user: bidder, amount: DEPOSIT_INCREMENT })
+          void deposit.mutate({ user: bidder, amount: DEPOSIT_INCREMENT })
         }
         className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 disabled:opacity-50 rounded text-xs font-medium transition-colors"
       >
@@ -488,7 +487,7 @@ function BidderCard({
         <button
           disabled={!biddable || bidBusy || bidAmount <= 0 || belowMin}
           onClick={() =>
-            void placeBid({ user: bidder, auctionName, amount: bidAmount })
+            void bid.mutate({ user: bidder, auctionName, amount: bidAmount })
           }
           className="mt-1 px-3 py-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 rounded text-sm font-medium transition-colors"
         >
@@ -511,13 +510,9 @@ function BidderCard({
           {bidMessage.text}
         </p>
       )}
-      {(depositOutcome.kind === 'failed' ||
-        depositOutcome.kind === 'error') && (
+      {deposit.isError && (
         <p className="text-xs font-mono text-red-400">
-          deposit:{' '}
-          {depositOutcome.kind === 'failed'
-            ? depositOutcome.reason
-            : depositOutcome.message}
+          deposit: {deposit.error.message}
         </p>
       )}
     </div>

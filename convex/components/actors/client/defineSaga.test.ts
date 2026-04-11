@@ -184,15 +184,22 @@ describe("defineSaga", () => {
       input: {},
       context: {},
       failReason: undefined,
+      failedStep: undefined,
     };
     const projection = transfer.project!(state);
     expect(projection).toEqual({
       phase: "running",
       currentStep: "withdraw",
       completedSteps: ["validate"],
+      failedStep: null,
       failReason: undefined,
     });
-    expectTypeOf(projection).toEqualTypeOf<SagaProjection>();
+    // Step names narrow to the saga's own union — `"withdraw" | "deposit"` —
+    // rather than plain `string`, courtesy of the __saga brand on the
+    // return type of defineSaga.
+    expectTypeOf(projection).toEqualTypeOf<
+      SagaProjection<"withdraw" | "deposit">
+    >();
   });
 
   test("throws on invalid firstStep", () => {

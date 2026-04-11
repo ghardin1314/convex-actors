@@ -106,10 +106,22 @@ export type SagaPhase =
   | "completed"
   | "failed";
 
-export type SagaProjection = {
+/**
+ * Public, client-safe projection of a saga's lifecycle. Deliberately
+ * carries *only step names and phase* — no inputs, contexts, ask values,
+ * or context snapshots — so sagas whose state might contain sensitive
+ * payloads are safe to expose via `system.peek`.
+ *
+ * Generic over `StepNames` so that `defineSaga`'s return-type brand can
+ * narrow `currentStep` / `completedSteps` / `failedStep` to a specific
+ * saga's step-name union in client helpers.
+ */
+export type SagaProjection<StepNames extends string = string> = {
   phase: SagaPhase;
-  currentStep: string | null;
-  completedSteps: string[];
+  currentStep: StepNames | null;
+  completedSteps: StepNames[];
+  /** Step whose failure triggered compensation, or null on success / before failure. */
+  failedStep: StepNames | null;
   failReason: string | undefined;
 };
 
@@ -122,6 +134,8 @@ export interface SagaState<Input = unknown, Context = unknown> {
   input: Input;
   context: Context;
   failReason?: string;
+  /** Set by `startCompensation` from the currentStep at failure time. */
+  failedStep?: string;
 }
 
 // ── Internal helpers ────────────────────────────────────────────
@@ -273,6 +287,12 @@ function startCompensation<Input, Context, StepNames extends string>(
   steps: Record<string, SagaStep<Input, Context, StepNames>>,
   actorCtx: ActorHandlerCtx,
 ): void {
+  // Record which step triggered compensation before we clear currentStep.
+  // Whether the step ran fully (and is in completedSteps) or failed
+  // mid-ask, `state.currentStep` is the name that was active at failure.
+  if (state.currentStep !== null) {
+    state.failedStep = state.currentStep;
+  }
   const reversed = [...state.completedSteps].reverse();
   for (const { name, contextSnapshot } of reversed) {
     const step = steps[name];
@@ -286,6 +306,7 @@ function startCompensation<Input, Context, StepNames extends string>(
     }
   }
   state.phase = "failed";
+  state.currentStep = null;
 }
 
 // ── defineSaga ──────────────────────────────────────────────────
@@ -305,7 +326,7 @@ export function defineSaga<
   initialContext: () => z.infer<ContextV>;
   firstStep: string & keyof Steps;
   steps: Steps;
-}): ActorDefinition<Type, z.ZodTypeAny, { start: { payload: InputV } } & Record<string, MessageDef>, SagaProjection> {
+}): SagaDefinition<Type, InputV, ContextV, Steps> {
   // ── Validate spec ──
   if (!(spec.firstStep in spec.steps)) {
     throw new Error(
@@ -328,6 +349,7 @@ export function defineSaga<
     input: spec.input,
     context: spec.context,
     failReason: z.string().optional(),
+    failedStep: z.string().optional(),
   });
 
   const { steps } = spec;
@@ -441,18 +463,74 @@ export function defineSaga<
       input: null as Input,
       context: spec.initialContext(),
       failReason: undefined,
+      failedStep: undefined,
     }),
-    project: (state: State): SagaProjection => ({
+    project: (state: State): SagaProjection<StepNames> => ({
       phase: state.phase,
-      currentStep: state.currentStep,
-      completedSteps: state.completedSteps.map((s) => s.name),
+      currentStep: state.currentStep as StepNames | null,
+      completedSteps: state.completedSteps.map((s) => s.name) as StepNames[],
+      failedStep: (state.failedStep ?? null) as StepNames | null,
       failReason: state.failReason,
     }),
     handle,
-  } as unknown as ActorDefinition<
-    Type,
-    z.ZodTypeAny,
-    { start: { payload: InputV } } & Record<string, MessageDef>,
-    SagaProjection
-  >;
+  } as unknown as SagaDefinition<Type, InputV, ContextV, Steps>;
 }
+
+// ── Saga definition brand ───────────────────────────────────────
+
+/**
+ * Return type of `defineSaga`. At runtime this is a plain
+ * `ActorDefinition` (the actor system sees it that way). The `__saga`
+ * phantom field is compile-time only — it carries the Steps/Input/Context
+ * generics so client helpers like `createSagaAwaiter` can narrow
+ * projection step names to the saga's own step union.
+ */
+export type SagaDefinition<
+  Type extends string,
+  InputV extends z.ZodTypeAny,
+  ContextV extends z.ZodTypeAny,
+  Steps,
+> = ActorDefinition<
+  Type,
+  z.ZodTypeAny,
+  { start: { payload: InputV } } & Record<string, MessageDef>,
+  SagaProjection<string & keyof Steps>
+> & {
+  readonly __saga: {
+    steps: Steps;
+    input: z.infer<InputV>;
+    context: z.infer<ContextV>;
+  };
+};
+
+/**
+ * Top of the saga-definition hierarchy. Use as a generic constraint
+ * (`<D extends AnySagaDefinition>`) when a helper needs the __saga brand
+ * without caring about the specific shape. Every `defineSaga(...)` result
+ * is assignable to this.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnySagaDefinition = AnyActorDefinition & {
+  readonly __saga: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    steps: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    input: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    context: any;
+  };
+};
+
+/** Step-name union extracted from a saga definition's phantom brand. */
+export type StepNamesOf<D extends AnySagaDefinition> =
+  string & keyof D["__saga"]["steps"];
+
+/** Saga's declared input type — the payload of `start`. */
+export type SagaInputOf<D extends AnySagaDefinition> = D["__saga"]["input"];
+
+/** Saga's declared context type. */
+export type SagaContextOf<D extends AnySagaDefinition> = D["__saga"]["context"];
+
+/** Fully-narrowed projection shape for a specific saga definition. */
+export type SagaProjectionOf<D extends AnySagaDefinition> =
+  SagaProjection<StepNamesOf<D>>;
