@@ -376,16 +376,17 @@ describe("auction: state machine", () => {
     expect(state).toMatchObject({ phase: "expired", currentBid: null });
   });
 
-  test("winning bid drives to settling", async () => {
+  test("winning bid drives through settlement to sold", async () => {
     const t = setup();
     await send(t, "account", "alice", "deposit", { amount: 1_000 });
+    await send(t, "account", "seller-1", "deposit", { amount: 0 });
     await send(t, "account", "alice", "hold", {
       holdId: "alice-h1",
       amount: 100,
     });
     await send(t, "auction", "a7", "init", {
       item: ITEM,
-      seller: "s",
+      seller: "seller-1",
       startingPrice: 10,
       config: SHORT_CONFIG,
     });
@@ -398,14 +399,18 @@ describe("auction: state machine", () => {
     });
     await drain(t);
 
+    // With Phase 2 wired up, the going_twice tick kicks off the
+    // settlementSaga which drains all the way through to `sold`.
     const state = await peek(t, "auction", "a7");
     expect(state).toMatchObject({
-      phase: "settling",
+      phase: "sold",
       currentBid: { bidder: "alice", amount: 100 },
     });
-    // Alice's hold must still be standing — settlement is Phase 2.
+    // Winner's hold is settled (debited), seller credited.
     const alice = await peek(t, "account", "alice");
-    expect(alice).toMatchObject({ balance: 1000, availableBalance: 900 });
+    expect(alice).toMatchObject({ balance: 900, availableBalance: 900 });
+    const seller = await peek(t, "account", "seller-1");
+    expect(seller).toMatchObject({ balance: 100, availableBalance: 100 });
   });
 
   test("bid rejected once auction has expired (phase_closed)", async () => {

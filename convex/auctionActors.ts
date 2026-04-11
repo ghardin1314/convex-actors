@@ -1,18 +1,28 @@
 /**
- * Auction house demo actors — Phase 1.
+ * Auction house demo actors — Phases 1 and 2.
  *
- * Phase 1 implements the two core actors: `account` and `auction`.
- * The `auctionHouse` supervisor, `bidSaga`, and `settlementSaga` come
- * in Phase 2. Until then:
- *   - Auctions are created via direct `init` sends (no supervisor).
- *   - The going_twice tick transitions to `settling` but does not yet
- *     kick off a saga — settlement lives in Phase 2.
- *   - `reportState` fan-out to the supervisor is deferred to Phase 2.
+ * Phase 1 shipped `account` and `auction` on their own; Phase 2 wires
+ * them into the wider system:
+ *   - Every auction phase transition / accepted bid fires a
+ *     `reportState` send to `auctionHouse:"main"` (fire-and-forget).
+ *   - The `going_twice` tick with a winning bid kicks off a
+ *     `settlementSaga`, which drives the auction through
+ *     `settling → sold` (or `settlement_failed` on rollback).
+ *   - The auction handles the saga's callbacks via `settlementComplete`
+ *     and `settlementFailed`.
+ *
+ * Cyclic module imports (`auctionActors ↔ auctionHouse`,
+ * `auctionActors ↔ auctionSagas`) are intentional — the bindings are
+ * only ever read inside handler bodies, so ESM live-bindings resolve
+ * at invocation time rather than module evaluation time.
  *
  * See DEMO.md for the full design.
  */
 import { z } from 'zod'
 import { defineActor } from './components/actors/client/defineActor'
+import type { ActorHandlerCtx } from './components/actors/client/defineActor'
+import { auctionHouse } from './auctionHouse'
+import { settlementSaga } from './auctionSagas'
 
 // ── account ─────────────────────────────────────────────────────
 
@@ -144,6 +154,8 @@ export const auction = defineActor({
     /** Bumped on every reschedule — stale ticks are dropped. */
     tickEpoch: z.number(),
     config: auctionConfigSchema,
+    /** Reason reported by `settlementSaga` on terminal failure. */
+    settlementFailureReason: z.string().nullable(),
   }),
   messages: {
     init: {
@@ -162,6 +174,10 @@ export const auction = defineActor({
       }),
     },
     tick: { payload: z.object({ epoch: z.number() }) },
+    // Called by `settlementSaga.notifyAuction` on the success path.
+    settlementComplete: { payload: z.object({}) },
+    // Called by `settlementSaga.begin.compensate` on any failure path.
+    settlementFailed: { payload: z.object({ reason: z.string() }) },
   },
   initialState: () => ({
     phase: 'initializing' as const,
@@ -173,6 +189,7 @@ export const auction = defineActor({
     phaseStartedAt: 0,
     tickEpoch: 0,
     config: DEFAULT_AUCTION_CONFIG,
+    settlementFailureReason: null,
   }),
   project: (state) => {
     // Live-countdown derived from `phaseStartedAt` + the remaining
@@ -214,6 +231,7 @@ export const auction = defineActor({
       phaseEndsAt,
       /** Projected ultimate end if no further snipe extensions occur. */
       expectedEndAt,
+      settlementFailureReason: state.settlementFailureReason,
     }
   },
   handle: {
@@ -229,7 +247,7 @@ export const auction = defineActor({
       state.tickEpoch = 0
       state.phaseStartedAt = ctx.now()
       ctx.sendSelf('tick', { epoch: 0 }, { after: state.config.durationMs })
-      // TODO(Phase 2): ctx.stub(auctionHouse, "main").send("reportState", ...)
+      reportAuctionState(ctx, state)
     },
 
     bid: async (state, { bidder, amount, holdId }, ctx) => {
@@ -274,7 +292,7 @@ export const auction = defineActor({
           { after: state.config.goingOnceMs },
         )
       }
-      // TODO(Phase 2): reportState to auctionHouse
+      reportAuctionState(ctx, state)
     },
 
     tick: async (state, { epoch }, ctx) => {
@@ -291,6 +309,7 @@ export const auction = defineActor({
             { epoch: state.tickEpoch },
             { after: state.config.goingOnceMs },
           )
+          reportAuctionState(ctx, state)
           return
         }
         case 'going_once': {
@@ -302,17 +321,30 @@ export const auction = defineActor({
             { epoch: state.tickEpoch },
             { after: state.config.goingTwiceMs },
           )
+          reportAuctionState(ctx, state)
           return
         }
         case 'going_twice': {
           state.phaseStartedAt = ctx.now()
           if (state.currentBid !== null) {
-            // Phase 2 will kick off settlementSaga here and the saga
-            // will drive settling -> sold via settlementComplete.
+            // Hand off to the settlement saga — it drives the auction
+            // through settling -> sold (or -> settlement_failed on
+            // rollback) via `settlementComplete` / `settlementFailed`.
             state.phase = 'settling'
+            state.tickEpoch += 1
+            const self = ctx.self()
+            const sagaName = `${self.name}-settlement`
+            ctx.stub(settlementSaga, sagaName).send('start', {
+              auctionName: self.name,
+              winner: state.currentBid.bidder,
+              seller: state.seller,
+              amount: state.currentBid.amount,
+              holdId: state.currentBid.holdId,
+            })
           } else {
             state.phase = 'expired'
           }
+          reportAuctionState(ctx, state)
           return
         }
         default:
@@ -320,5 +352,66 @@ export const auction = defineActor({
           return
       }
     },
+
+    settlementComplete: async (state, _payload, ctx) => {
+      // Stale / duplicate deliveries are dropped silently so a retry
+      // after success doesn't bounce us out of `sold`.
+      if (state.phase !== 'settling') return
+      state.phase = 'sold'
+      state.phaseStartedAt = ctx.now()
+      reportAuctionState(ctx, state)
+    },
+
+    settlementFailed: async (state, { reason }, ctx) => {
+      if (state.phase !== 'settling') return
+      state.phase = 'settlement_failed'
+      state.phaseStartedAt = ctx.now()
+      state.settlementFailureReason = reason
+      reportAuctionState(ctx, state)
+    },
   },
 })
+
+// ── helpers ─────────────────────────────────────────────────────
+
+/**
+ * Compute the projected final end timestamp for an auction in its
+ * current phase, assuming no further snipe extensions. Returns null
+ * once the auction is terminal (settling / sold / expired / etc).
+ */
+function computeExpectedEndAt(
+  state: z.infer<typeof auction.state>,
+): number | null {
+  const { goingOnceMs, goingTwiceMs, durationMs } = state.config
+  const start = state.phaseStartedAt
+  switch (state.phase) {
+    case 'active':
+      return start + durationMs + goingOnceMs + goingTwiceMs
+    case 'going_once':
+      return start + goingOnceMs + goingTwiceMs
+    case 'going_twice':
+      return start + goingTwiceMs
+    default:
+      return null
+  }
+}
+
+/**
+ * Push-based state aggregation: every phase transition / accepted bid
+ * fire-and-forget reports the new shape to the supervisor. Kept in a
+ * helper to avoid repeating the same payload in every handler.
+ */
+function reportAuctionState(
+  ctx: ActorHandlerCtx<typeof auction>,
+  state: z.infer<typeof auction.state>,
+): void {
+  const self = ctx.self()
+  ctx.stub(auctionHouse, 'main').send('reportState', {
+    auctionName: self.name,
+    phase: state.phase,
+    currentBid: state.currentBid
+      ? { bidder: state.currentBid.bidder, amount: state.currentBid.amount }
+      : null,
+    endsAt: computeExpectedEndAt(state) ?? 0,
+  })
+}
