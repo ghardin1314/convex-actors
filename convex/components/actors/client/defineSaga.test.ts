@@ -170,6 +170,7 @@ describe("defineSaga", () => {
         phase: "running",
         currentStep: "withdraw",
         completedSteps: [{ name: "validate", contextSnapshot: {} }],
+        generation: 1,
         failReason: undefined,
         failedStep: undefined,
       },
@@ -431,6 +432,8 @@ describe("reply handling", () => {
     state.input = { from: "alice", to: "bob", amount: 100 };
     state.context = { withdrawn: undefined };
     state._saga.completedSteps = [];
+    // Generation ticks on each emitted ask; first ask → 1.
+    state._saga.generation = 1;
     return state;
   }
 
@@ -442,7 +445,7 @@ describe("reply handling", () => {
       "withdraw_reply",
       {
         result: { kind: "success", value: { newBalance: 900 } },
-        context: null,
+        context: { generation: state._saga.generation },
         from: { type: "wallet", name: "alice" },
       },
     );
@@ -470,6 +473,8 @@ describe("reply handling", () => {
     state._saga.completedSteps = [
       { name: "withdraw", contextSnapshot: { withdrawn: undefined } },
     ];
+    // Second ask emitted → generation is now 2.
+    state._saga.generation = 2;
 
     const { run } = runSagaHandler(
       transfer,
@@ -477,7 +482,7 @@ describe("reply handling", () => {
       "deposit_reply",
       {
         result: { kind: "success", value: { newBalance: 200 } },
-        context: null,
+        context: { generation: state._saga.generation },
         from: { type: "wallet", name: "bob" },
       },
     );
@@ -495,7 +500,7 @@ describe("reply handling", () => {
       "withdraw_reply",
       {
         result: { kind: "fail", reason: "insufficient_funds" },
-        context: null,
+        context: { generation: state._saga.generation },
         from: { type: "wallet", name: "alice" },
       },
     );
@@ -515,6 +520,7 @@ describe("reply handling", () => {
     state._saga.completedSteps = [
       { name: "withdraw", contextSnapshot: { withdrawn: undefined } },
     ];
+    state._saga.generation = 2;
 
     const { run, internals } = runSagaHandler(
       transfer,
@@ -522,7 +528,7 @@ describe("reply handling", () => {
       "deposit_reply",
       {
         result: { kind: "fail", reason: "target_locked" },
-        context: null,
+        context: { generation: state._saga.generation },
         from: { type: "wallet", name: "bob" },
       },
     );
@@ -549,7 +555,7 @@ describe("reply handling", () => {
       "withdraw_reply",
       {
         result: { kind: "defect", error: "handler crashed" },
-        context: null,
+        context: { generation: state._saga.generation },
         from: { type: "wallet", name: "alice" },
       },
     );
@@ -621,7 +627,7 @@ describe("compensation ordering and context snapshots", () => {
       "step3_reply",
       {
         result: { kind: "fail", reason: "boom" },
-        context: null,
+        context: { generation: state._saga.generation },
         from: { type: "wallet", name: "alice" },
       },
     );
@@ -955,7 +961,7 @@ describe("edge cases", () => {
       "step3_reply",
       {
         result: { kind: "fail", reason: "boom" },
-        context: null,
+        context: { generation: state._saga.generation },
         from: { type: "wallet", name: "alice" },
       },
     );
@@ -1008,18 +1014,18 @@ describe("looping steps", () => {
     },
   });
 
-  function successReply(from: string) {
+  function successReply(state: SagaState, from: string) {
     return {
       result: { kind: "success" as const, value: { newBalance: 50 } },
-      context: null,
+      context: { generation: state._saga.generation },
       from: { type: "wallet", name: from },
     };
   }
 
-  function failReply(from: string) {
+  function failReply(state: SagaState, from: string) {
     return {
       result: { kind: "fail" as const, reason: "insufficient_funds" },
-      context: null,
+      context: { generation: state._saga.generation },
       from: { type: "wallet", name: from },
     };
   }
@@ -1039,7 +1045,7 @@ describe("looping steps", () => {
 
     // Reply from alice: advances to bob
     const { run: run1, internals: effects1 } = runSagaHandler(
-      multiWithdraw, state, "withdraw_reply", successReply("alice"),
+      multiWithdraw, state, "withdraw_reply", successReply(state, "alice"),
     );
     await run1();
     expect(state.context).toEqual({ index: 1 });
@@ -1048,7 +1054,7 @@ describe("looping steps", () => {
 
     // Reply from bob: advances to charlie
     const { run: run2, internals: effects2 } = runSagaHandler(
-      multiWithdraw, state, "withdraw_reply", successReply("bob"),
+      multiWithdraw, state, "withdraw_reply", successReply(state, "bob"),
     );
     await run2();
     expect(state.context).toEqual({ index: 2 });
@@ -1057,7 +1063,7 @@ describe("looping steps", () => {
 
     // Reply from charlie: transitions to deposit
     const { run: run3, internals: effects3 } = runSagaHandler(
-      multiWithdraw, state, "withdraw_reply", successReply("charlie"),
+      multiWithdraw, state, "withdraw_reply", successReply(state, "charlie"),
     );
     await run3();
     expect(state._saga.completedSteps).toHaveLength(3);
@@ -1068,7 +1074,7 @@ describe("looping steps", () => {
 
     // Deposit reply: completes
     const { run: run4 } = runSagaHandler(
-      multiWithdraw, state, "deposit_reply", successReply("vault"),
+      multiWithdraw, state, "deposit_reply", successReply(state, "vault"),
     );
     await run4();
     expect(state._saga.phase).toBe("completed");
@@ -1087,20 +1093,20 @@ describe("looping steps", () => {
 
     // Alice succeeds
     const { run: run1 } = runSagaHandler(
-      multiWithdraw, state, "withdraw_reply", successReply("alice"),
+      multiWithdraw, state, "withdraw_reply", successReply(state, "alice"),
     );
     await run1();
 
     // Bob succeeds
     const { run: run2 } = runSagaHandler(
-      multiWithdraw, state, "withdraw_reply", successReply("bob"),
+      multiWithdraw, state, "withdraw_reply", successReply(state, "bob"),
     );
     await run2();
     expect(state._saga.completedSteps).toHaveLength(2);
 
     // Charlie fails
     const { run: run3, internals } = runSagaHandler(
-      multiWithdraw, state, "withdraw_reply", failReply("charlie"),
+      multiWithdraw, state, "withdraw_reply", failReply(state, "charlie"),
     );
     await run3();
 
@@ -1130,7 +1136,7 @@ describe("looping steps", () => {
 
     // Alice fails immediately
     const { run, internals } = runSagaHandler(
-      multiWithdraw, state, "withdraw_reply", failReply("alice"),
+      multiWithdraw, state, "withdraw_reply", failReply(state, "alice"),
     );
     await run();
 
@@ -1151,7 +1157,7 @@ describe("looping steps", () => {
 
     for (let i = 0; i < 3; i++) {
       const { run } = runSagaHandler(
-        multiWithdraw, state, "withdraw_reply", successReply(input.sources[i]),
+        multiWithdraw, state, "withdraw_reply", successReply(state, input.sources[i]),
       );
       await run();
     }
@@ -1204,7 +1210,7 @@ describe("dynamic next steps", () => {
       saga, state1, "check_reply",
       {
         result: { kind: "success", value: { newBalance: 500 } },
-        context: null,
+        context: { generation: state1._saga.generation },
         from: { type: "wallet", name: "rich" },
       },
     );
@@ -1226,7 +1232,7 @@ describe("dynamic next steps", () => {
       saga, state2, "check_reply",
       {
         result: { kind: "success", value: { newBalance: 5 } },
-        context: null,
+        context: { generation: state2._saga.generation },
         from: { type: "wallet", name: "poor" },
       },
     );
@@ -1282,5 +1288,225 @@ describe("dynamic next steps", () => {
     expect(state2._saga.phase).toBe("completed");
     expect(state2.context).toEqual({ path: "negative->done" });
     expect(state2._saga.completedSteps.map((s) => s.name)).toEqual(["decide", "negative"]);
+  });
+});
+
+describe("generation guard", () => {
+  const transfer = defineSaga({
+    type: "transferGen",
+    input: z.object({ from: z.string(), to: z.string(), amount: z.number() }),
+    context: z.object({ withdrawn: z.boolean().optional() }),
+    initialContext: () => ({ withdrawn: undefined }),
+    firstStep: "withdraw",
+    steps: {
+      withdraw: {
+        run: (input, _context, ctx) =>
+          ctx.stub(wallet, input.from).ask("withdraw", { amount: input.amount }),
+        onSuccess: (_value, _input, context) => ({
+          context: { ...context, withdrawn: true },
+          next: "deposit" as const,
+        }),
+        compensate: (input, _context, ctx) => {
+          ctx.stub(wallet, input.from).send("deposit", { amount: input.amount });
+        },
+      },
+      deposit: {
+        run: (input, _context, ctx) =>
+          ctx.stub(wallet, input.to).ask("deposit", { amount: input.amount }),
+        onSuccess: () => ({ next: null }),
+      },
+    },
+  });
+
+  test("initial generation is 0; each ask bumps it by one", async () => {
+    const state = sagaState(transfer);
+    expect(state._saga.generation).toBe(0);
+
+    const { run, internals } = runSagaHandler(
+      transfer, state, "start", { from: "alice", to: "bob", amount: 100 },
+    );
+    await run();
+
+    // First ask emitted → generation = 1 and stamped on replyTo.context.
+    expect(state._saga.generation).toBe(1);
+    const askEffect = internals.effects.find((e: Effect) => e.replyTo);
+    expect(askEffect!.replyTo!.context).toEqual({ generation: 1 });
+  });
+
+  test("generation is bumped on each successive ask across steps", async () => {
+    const state = sagaState(transfer);
+    await runSagaHandler(
+      transfer, state, "start", { from: "alice", to: "bob", amount: 100 },
+    ).run();
+    expect(state._saga.generation).toBe(1);
+
+    const { run, internals } = runSagaHandler(
+      transfer, state, "withdraw_reply",
+      {
+        result: { kind: "success", value: { newBalance: 900 } },
+        context: { generation: 1 },
+        from: { type: "wallet", name: "alice" },
+      },
+    );
+    await run();
+
+    // Advanced to deposit + emitted a new ask → generation = 2.
+    expect(state._saga.currentStep).toBe("deposit");
+    expect(state._saga.generation).toBe(2);
+    const askEffect = internals.effects.find((e: Effect) => e.replyTo);
+    expect(askEffect!.replyTo!.context).toEqual({ generation: 2 });
+  });
+
+  test("cross-step stale reply is dropped", async () => {
+    // Saga is awaiting deposit_reply (generation 2). A late withdraw_reply
+    // stamped with generation 1 arrives — e.g. a duplicate delivery — and
+    // must not be processed, or it would mis-trigger withdraw's onSuccess.
+    const state = sagaState(transfer);
+    await runSagaHandler(
+      transfer, state, "start", { from: "alice", to: "bob", amount: 100 },
+    ).run();
+    await runSagaHandler(
+      transfer, state, "withdraw_reply",
+      {
+        result: { kind: "success", value: { newBalance: 900 } },
+        context: { generation: 1 },
+        from: { type: "wallet", name: "alice" },
+      },
+    ).run();
+    expect(state._saga.currentStep).toBe("deposit");
+    expect(state._saga.generation).toBe(2);
+    const completedBefore = state._saga.completedSteps.length;
+
+    // Stale withdraw_reply with the old generation — must be dropped.
+    const { run, internals } = runSagaHandler(
+      transfer, state, "withdraw_reply",
+      {
+        result: { kind: "success", value: { newBalance: 900 } },
+        context: { generation: 1 },
+        from: { type: "wallet", name: "alice" },
+      },
+    );
+    await run();
+
+    // Nothing changed: still on deposit, no new effects, no new completed steps.
+    expect(state._saga.phase).toBe("running");
+    expect(state._saga.currentStep).toBe("deposit");
+    expect(state._saga.generation).toBe(2);
+    expect(state._saga.completedSteps).toHaveLength(completedBefore);
+    expect(internals.effects).toHaveLength(0);
+  });
+
+  test("same-step stale reply on a looping step is dropped", async () => {
+    // A saga whose step loops back to itself can have two generations of
+    // the same ask in flight across retries. A late reply from the first
+    // invocation must not be consumed by the handler waiting on the second.
+    const multiWithdraw = defineSaga({
+      type: "loopingGen",
+      input: z.object({ sources: z.array(z.string()), amount: z.number() }),
+      context: z.object({ index: z.number() }),
+      initialContext: () => ({ index: 0 }),
+      firstStep: "withdraw",
+      steps: {
+        withdraw: {
+          run: (input, context, ctx) =>
+            ctx.stub(wallet, input.sources[context.index]).ask("withdraw", {
+              amount: input.amount,
+            }),
+          onSuccess: (_value, input, context) => {
+            const nextIndex = context.index + 1;
+            if (nextIndex < input.sources.length) {
+              return { context: { index: nextIndex }, next: "withdraw" as const };
+            }
+            return { context, next: null };
+          },
+        },
+      },
+    });
+
+    const state = sagaState(multiWithdraw);
+    await runSagaHandler(
+      multiWithdraw, state, "start", { sources: ["alice", "bob"], amount: 10 },
+    ).run();
+    // First withdraw ask → generation 1.
+    expect(state._saga.generation).toBe(1);
+
+    // First reply: advances to the second withdraw ask → generation 2.
+    await runSagaHandler(
+      multiWithdraw, state, "withdraw_reply",
+      {
+        result: { kind: "success", value: { newBalance: 90 } },
+        context: { generation: 1 },
+        from: { type: "wallet", name: "alice" },
+      },
+    ).run();
+    expect(state._saga.generation).toBe(2);
+    expect(state.context).toEqual({ index: 1 });
+    expect(state._saga.completedSteps).toHaveLength(1);
+
+    // A late duplicate of the first reply arrives stamped with generation 1
+    // while the saga is awaiting generation 2 — must be dropped, not advance
+    // the loop index or push a new completed step.
+    const { run, internals } = runSagaHandler(
+      multiWithdraw, state, "withdraw_reply",
+      {
+        result: { kind: "success", value: { newBalance: 90 } },
+        context: { generation: 1 },
+        from: { type: "wallet", name: "alice" },
+      },
+    );
+    await run();
+
+    expect(state._saga.generation).toBe(2);
+    expect(state.context).toEqual({ index: 1 });
+    expect(state._saga.completedSteps).toHaveLength(1);
+    expect(internals.effects).toHaveLength(0);
+  });
+
+  test("reply with missing context is dropped", async () => {
+    // Defence in depth: a reply carrying a null/undefined context (as a
+    // non-saga sender might produce) must not be accepted just because the
+    // phase is running.
+    const state = sagaState(transfer);
+    await runSagaHandler(
+      transfer, state, "start", { from: "alice", to: "bob", amount: 100 },
+    ).run();
+
+    const before = JSON.parse(JSON.stringify(state));
+    const { run, internals } = runSagaHandler(
+      transfer, state, "withdraw_reply",
+      {
+        result: { kind: "success", value: { newBalance: 900 } },
+        context: null,
+        from: { type: "wallet", name: "alice" },
+      },
+    );
+    await run();
+
+    expect(state).toEqual(before);
+    expect(internals.effects).toHaveLength(0);
+  });
+
+  test("reply with a future generation is dropped", async () => {
+    // A reply stamped with a generation *ahead* of what the saga has
+    // emitted is nonsensical and must not be applied either.
+    const state = sagaState(transfer);
+    await runSagaHandler(
+      transfer, state, "start", { from: "alice", to: "bob", amount: 100 },
+    ).run();
+    expect(state._saga.generation).toBe(1);
+
+    const before = JSON.parse(JSON.stringify(state));
+    const { run, internals } = runSagaHandler(
+      transfer, state, "withdraw_reply",
+      {
+        result: { kind: "success", value: { newBalance: 900 } },
+        context: { generation: 99 },
+        from: { type: "wallet", name: "alice" },
+      },
+    );
+    await run();
+
+    expect(state).toEqual(before);
+    expect(internals.effects).toHaveLength(0);
   });
 });

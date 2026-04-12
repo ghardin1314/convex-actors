@@ -177,10 +177,20 @@ export interface SagaInternalState<Context = unknown> {
   phase: SagaPhase;
   currentStep: string | null;
   completedSteps: Array<{ name: string; contextSnapshot: Context }>;
+  /**
+   * Monotonic counter bumped on every ask emission. Stamped into
+   * `replyTo.context` so the synthesized reply handler can drop
+   * mis-routed or duplicate replies whose generation no longer matches
+   * the one the saga is currently awaiting.
+   */
+  generation: number;
   failReason?: string;
   /** Set by `startCompensation` from the currentStep at failure time. */
   failedStep?: string;
 }
+
+/** Shape stamped into `replyTo.context` on every saga-emitted ask. */
+export type SagaReplyContext = { generation: number };
 
 export interface SagaState<Input = unknown, Context = unknown> {
   _saga: SagaInternalState<Context>;
@@ -275,13 +285,17 @@ function runStepChain<Input, Context, StepNames extends string>(
       // Don't push to completedSteps yet — the ask hasn't succeeded.
       // The reply handler pushes on success so compensation only runs
       // for steps whose external action actually completed.
+      state._saga.generation += 1;
+      const replyContext: SagaReplyContext = {
+        generation: state._saga.generation,
+      };
       internalCtx.pushAsk(
         result.def,
         result.name,
         result.msgType,
         result.payload,
         `${stepName}_reply`,
-        null,
+        replyContext,
       );
       return;
     }
@@ -377,6 +391,7 @@ export function defineSaga<
     completedSteps: z.array(
       z.object({ name: z.string(), contextSnapshot: spec.context }),
     ),
+    generation: z.number(),
     failReason: z.string().optional(),
     failedStep: z.string().optional(),
   });
@@ -394,9 +409,12 @@ export function defineSaga<
     {
       start: { payload: spec.input },
     };
+  const sagaReplyContextSchema = z.object({ generation: z.number() });
   for (const stepName of Object.keys(steps)) {
     if (steps[stepName].onSuccess) {
-      messages[`${stepName}_reply`] = { payload: reply(z.unknown()) };
+      messages[`${stepName}_reply`] = {
+        payload: reply(z.unknown(), { context: sagaReplyContextSchema }),
+      };
     }
   }
 
@@ -419,6 +437,7 @@ export function defineSaga<
     state.input = payload as Input;
     state.context = spec.initialContext();
     state._saga.completedSteps = [];
+    state._saga.generation = 0;
     state._saga.currentStep = spec.firstStep;
 
     try {
@@ -443,7 +462,21 @@ export function defineSaga<
 
     handle[`${stepName}_reply`] = async (state, payload, internalCtx) => {
       if (state._saga.phase !== "running") return; // stale reply
-      const { result } = payload as ReplyPayload;
+      const { result, context } = payload as ReplyPayload<
+        unknown,
+        SagaReplyContext
+      >;
+      // Generation guard: drop replies whose ask was superseded. The
+      // saga's `generation` ticks on every pushAsk, so a reply stamped
+      // with an older generation (duplicate, retry, or mis-routed
+      // reply to a prior step) no longer matches the awaited ask.
+      if (
+        context === null ||
+        context === undefined ||
+        context.generation !== state._saga.generation
+      ) {
+        return;
+      }
 
       if (result.kind !== "success") {
         state._saga.failReason =
@@ -508,6 +541,7 @@ export function defineSaga<
         phase: "idle",
         currentStep: null,
         completedSteps: [],
+        generation: 0,
         failReason: undefined,
         failedStep: undefined,
       },

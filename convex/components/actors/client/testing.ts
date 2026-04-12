@@ -288,7 +288,13 @@ export type ResolveSagaStepOptions<D extends AnySagaDefinition> =
     selfName?: string;
     now?: number;
     peek?: (actorType: string, name: string) => unknown | Promise<unknown>;
-    /** Reply-context the original ask carried, if any. */
+    /**
+     * Override the reply-context stamped on the payload. Defaults to
+     * `{ generation: state._saga.generation }` — the value the
+     * framework stamps on real asks — so the synthesized reply handler
+     * accepts it. Override this to simulate a mis-routed / stale
+     * reply whose generation no longer matches the awaited ask.
+     */
     replyContext?: unknown;
     /** `from` address stamped on the reply payload. */
     from?: { type: string; name: string };
@@ -328,7 +334,11 @@ export async function resolveSagaStep<D extends AnySagaDefinition>(
     );
   }
 
-  const replyOpts = { context: opts.replyContext, from: opts.from };
+  const defaultReplyContext = { generation: saga.generation };
+  const replyOpts = {
+    context: opts.replyContext ?? defaultReplyContext,
+    from: opts.from,
+  };
   let payload: ReplyPayload<unknown, unknown>;
   if (opts.kind === "success") {
     payload = buildSuccessReply(opts.value, replyOpts);
