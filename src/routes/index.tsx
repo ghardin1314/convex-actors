@@ -1,1005 +1,246 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { api } from "../../convex/_generated/api";
-import { useState, useCallback } from "react";
-import { useMutation } from "convex/react";
-import { createActorHooks } from "../../convex/components/actors/client/react";
-import {
-  counter,
-  wallet,
-  fragile,
-  jobRunner,
-  pingPong,
-  countdown,
-  leaderboard,
-  transferSaga,
-  multiTransfer,
-} from "../../convex/actors";
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import { useState } from 'react'
+import { useAuctionsList, useCreateAuction } from '../lib/auctionsHooks'
+import { SELLER } from '../lib/demoUsers'
+import { PhaseBadge, CountdownDisplay } from './auctions/-ui'
 
-const { useActor, useActorResponse } = createActorHooks(api.actorFunctions);
+export const Route = createFileRoute('/')({
+  component: AuctionLobby,
+})
 
-export const Route = createFileRoute("/")({
-  component: Home,
-});
+function AuctionLobby() {
+  const { data } = useAuctionsList()
+  const listings = data?.listings ?? []
+  const stuckAlerts = data?.stuckAlerts ?? []
 
-function Home() {
   return (
     <main className="min-h-screen bg-gray-950 text-gray-100 p-8">
-      <div className="max-w-3xl mx-auto flex flex-col gap-10">
-        <div>
-          <h1 className="text-3xl font-bold">Convex Actors Demo</h1>
+      <div className="max-w-5xl mx-auto flex flex-col gap-8">
+        <header>
+          <h1 className="text-3xl font-bold">Auction Lobby</h1>
           <p className="text-gray-400 mt-1">
-            Showcasing success, domain errors, defects, cross-actor messaging,
-            self-sends, delayed delivery, and stub.peek().
+            {data?.count ?? 0} auction{(data?.count ?? 0) === 1 ? '' : 's'}{' '}
+            tracked by the supervisor — all listed by{' '}
+            <span className="font-mono text-gray-300">{SELLER}</span>
           </p>
-        </div>
+        </header>
 
-        <section className="flex flex-col gap-4">
-          <SectionHeader
-            title="Counters + Leaderboard"
-            description="Three independent counter actors. The leaderboard actor uses stub.peek() to read all their projections and build a ranked snapshot — peek is read-only, no mutations."
-            color="emerald"
-          />
-          <div className="flex gap-4">
-            <CounterActor name="alice" />
-            <CounterActor name="bob" />
-            <CounterActor name="charlie" />
+        {stuckAlerts.length > 0 && (
+          <div className="border border-amber-700 bg-amber-950/40 rounded-lg p-4">
+            <p className="text-amber-300 font-semibold text-sm mb-1">
+              ⚠ Stuck settlements
+            </p>
+            <ul className="text-xs text-amber-200/80 font-mono flex flex-col gap-0.5">
+              {stuckAlerts.map((a, i) => (
+                <li key={`${a.auctionName}-${i}`}>
+                  {a.auctionName} — {a.reason} (
+                  {new Date(a.ts).toLocaleTimeString()})
+                </li>
+              ))}
+            </ul>
           </div>
-          <LeaderboardPanel />
-        </section>
+        )}
 
-        <section className="flex flex-col gap-4">
-          <SectionHeader
-            title="Delayed Messages + Drain Reschedule"
-            description="Messages with opts.after are delivered in the future. If a closer message arrives while a far one is pending, the drain reschedules to fire earlier — then continues to process the later one when its time comes."
-            color="emerald"
-          />
-          <DelayedCounterDemo />
-        </section>
+        <CreateAuctionForm />
 
-        <section className="flex flex-col gap-4">
-          <SectionHeader
-            title="Wallet Transfer (ask/reply)"
-            description="The source wallet debits itself, then uses ctx.ask() to deposit into the target wallet. The reply routes back to a transferDepositResult handler that logs the confirmation — or compensates on failure."
-            color="violet"
-          />
-          <TransferDemo />
-        </section>
-
-        <section className="flex flex-col gap-4">
-          <SectionHeader
-            title="Transfer Saga (chained ask/reply)"
-            description="A separate saga actor orchestrates a two-step transfer: ask wallet A to withdraw, on success ask wallet B to deposit. Each step is a separate ask with the reply driving the next phase. Demonstrates the saga pattern with typed context carry-through."
-            color="violet"
-          />
-          <TransferSagaDemo />
-        </section>
-
-        <section className="flex flex-col gap-4">
-          <SectionHeader
-            title="Saga Compensation (rollback on failure)"
-            description="Withdraw from two wallets and deposit the sum to a third. If the second withdraw fails (insufficient funds), the first withdrawal is automatically compensated — the money goes back."
-            color="rose"
-          />
-          <CompensationDemo />
-        </section>
-
-        <section className="flex flex-col gap-4">
-          <SectionHeader
-            title="Job Runner (ask + defect handling)"
-            description='Dispatches jobs to a fragile worker via ctx.ask(). Successful work echoes back through the reply handler. Crash jobs defect after 3 retries — the defect routes back too, so the runner can track failures.'
-            color="red"
-          />
-          <JobRunnerDemo />
-        </section>
-
-        <section className="flex flex-col gap-4">
-          <SectionHeader
-            title="Fragile Service"
-            description='Unhandled throws become "defect" responses after 3 retry attempts. The "work" message succeeds; "crash" always throws.'
-            color="red"
-          />
-          <FragileActor name="demo" />
-        </section>
-
-        <section className="flex flex-col gap-4">
-          <SectionHeader
-            title="Countdown Timer"
-            description="Uses ctx.sendSelf() with { after } to tick down once per interval. The actor schedules its own future work."
-            color="cyan"
-          />
-          <CountdownDemo />
-        </section>
-
-        <section className="flex flex-col gap-4">
-          <SectionHeader
-            title="Ping Pong"
-            description="Two actors rally a ball back and forth using ctx.stub().send(). Each hit decrements a counter; when it reaches 0 the rally stops."
-            color="blue"
-          />
-          <PingPongDemo />
-        </section>
+        {listings.length === 0 ? (
+          <div className="text-center text-gray-500 py-20 border border-gray-800 rounded-lg">
+            No auctions yet. Create one above.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {listings.map((l) => (
+              <AuctionCard key={l.name} listing={l} />
+            ))}
+          </div>
+        )}
       </div>
     </main>
-  );
+  )
 }
 
-// ── Shared ────────────────────────────────────────────────────────
+function CreateAuctionForm() {
+  const create = useCreateAuction()
+  const navigate = useNavigate()
+  const [title, setTitle] = useState('Rare Coin')
+  const [description, setDescription] = useState(
+    'A one-of-a-kind collectible from 1892.',
+  )
+  const [imageUrl, setImageUrl] = useState(
+    'https://placehold.co/400x300/1e293b/e2e8f0?text=Item',
+  )
+  const [startingPrice, setStartingPrice] = useState(10)
 
-function SectionHeader({
-  title,
-  description,
-  color,
-}: {
-  title: string;
-  description: string;
-  color: string;
-}) {
-  const borderColor: string = {
-    emerald: "border-emerald-700",
-    amber: "border-amber-700",
-    red: "border-red-700",
-    blue: "border-blue-700",
-    violet: "border-violet-700",
-    cyan: "border-cyan-700",
-  }[color] ?? "border-gray-700";
-  return (
-    <div className={`border-l-4 ${borderColor} pl-4`}>
-      <h2 className="text-xl font-semibold">{title}</h2>
-      <p className="text-gray-400 text-sm">{description}</p>
-    </div>
-  );
-}
+  const onCreate = () =>
+    create.mutate(
+      {
+        user: SELLER,
+        item: { title, description, imageUrl },
+        startingPrice,
+        config: {
+          durationMs: 30_000,
+          goingOnceMs: 10_000,
+          goingTwiceMs: 5_000,
+          minIncrement: 1,
+        },
+      },
+      {
+        onSuccess: (data) => {
+          if (data.ok) {
+            void navigate({
+              to: '/auctions/$name',
+              params: { name: data.name },
+            })
+          }
+        },
+      },
+    )
 
-type Response = {
-  messageId: string;
-  response:
-    | { kind: "success"; value: unknown }
-    | { kind: "fail"; reason: string; details?: unknown }
-    | { kind: "defect"; error: string; attempts: number };
-};
-
-function ResponseBadge({ response }: { response: Response["response"] }) {
-  if (response.kind === "success") {
-    return (
-      <span className="text-xs bg-emerald-900 text-emerald-300 px-2 py-1 rounded font-mono">
-        success{" "}
-        {response.value != null ? JSON.stringify(response.value) : "null"}
-      </span>
-    );
-  }
-  if (response.kind === "fail") {
-    return (
-      <span className="text-xs bg-amber-900 text-amber-300 px-2 py-1 rounded font-mono">
-        fail: {response.reason}{" "}
-        {response.details ? JSON.stringify(response.details) : ""}
-      </span>
-    );
-  }
-  return (
-    <span className="text-xs bg-red-900 text-red-300 px-2 py-1 rounded font-mono">
-      defect ({response.attempts} attempts): {response.error}
-    </span>
-  );
-}
-
-function ResponseLog({ messageIds }: { messageIds: string[] }) {
-  if (messageIds.length === 0) return null;
-  return (
-    <div className="mt-4 flex flex-col gap-1.5">
-      <p className="text-xs text-gray-500 uppercase tracking-wide">
-        Responses
-      </p>
-      {messageIds.map((id) => (
-        <ResponseRow key={id} messageId={id} />
-      ))}
-    </div>
-  );
-}
-
-function ResponseRow({ messageId }: { messageId: string }) {
-  const resp = useActorResponse(messageId);
-  return (
-    <div className="flex items-center gap-2 text-sm">
-      <span className="text-gray-600 font-mono text-xs">
-        {messageId.slice(0, 12)}...
-      </span>
-      {resp ? (
-        <ResponseBadge response={resp.response} />
-      ) : (
-        <span className="text-xs text-gray-600 italic">pending...</span>
-      )}
-    </div>
-  );
-}
-
-// ── Counter ──────────────────────────────────────────────────────
-
-function CounterActor({ name }: { name: string }) {
-  const { send, peek } = useActor(counter, name);
+  const busy = create.isPending
+  const errorMessage = create.isError
+    ? create.error.message
+    : create.data && !create.data.ok
+      ? create.data.reason
+      : null
 
   return (
-    <div className="flex-1 border border-gray-700 rounded-lg p-4 bg-gray-900">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="font-mono font-semibold text-gray-300 text-sm">
-          {name}
-        </h3>
-        <span className="text-2xl font-bold tabular-nums">{peek?.count ?? 0}</span>
-      </div>
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => void send("inc", { by: 1 })}
-          className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
-        >
-          +1
-        </button>
-        <button
-          onClick={() => void send("inc", { by: 5 })}
-          className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
-        >
-          +5
-        </button>
-        <button
-          onClick={() => void send("dec", { by: 1 })}
-          className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-medium transition-colors"
-        >
-          -1
-        </button>
-        <button
-          onClick={() => void send("reset", {})}
-          className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-medium transition-colors"
-        >
-          0
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Leaderboard ──────────────────────────────────────────────────
-
-function LeaderboardPanel() {
-  const { send, peek } = useActor(leaderboard, "main");
-
-  const data = peek ?? { rankings: [], lastRefresh: undefined };
-
-  const refresh = () => {
-    void send("refresh", {});
-  };
-
-  return (
-    <div className="border border-gray-700 rounded-lg p-4 bg-gray-900">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="font-mono font-semibold text-gray-300 text-sm">
-          leaderboard:main
-        </h3>
-        <button
-          onClick={refresh}
-          className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
-        >
-          Refresh (peek all)
-        </button>
-      </div>
-      {data.rankings.length === 0 ? (
-        <p className="text-xs text-gray-600 italic">
-          Click refresh to peek at all counters
-        </p>
-      ) : (
+    <details className="border border-gray-800 rounded-lg bg-gray-900">
+      <summary className="px-4 py-3 cursor-pointer font-semibold text-emerald-400 hover:text-emerald-300">
+        + Create auction
+      </summary>
+      <div className="p-4 pt-0 flex flex-col gap-3">
         <div className="flex flex-col gap-1">
-          {data.rankings.map((r, i) => (
-            <div key={r.name} className="flex items-center gap-2 text-sm">
-              <span className="text-gray-500 w-5 text-right">
-                {i === 0 ? "🥇" : i === 1 ? "🥈" : "🥉"}
-              </span>
-              <span className="font-mono text-gray-300 flex-1">{r.name}</span>
-              <span className="font-bold tabular-nums">{r.count}</span>
-            </div>
-          ))}
+          <label className="text-xs uppercase tracking-wide text-gray-500">
+            Title
+          </label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm"
+          />
         </div>
-      )}
-      {data.lastRefresh && (
-        <p className="text-xs text-gray-600 mt-2">
-          snapshot from {new Date(data.lastRefresh).toLocaleTimeString()}
-        </p>
-      )}
-    </div>
-  );
-}
-
-// ── Fragile ──────────────────────────────────────────────────────
-
-function FragileActor({ name }: { name: string }) {
-  const { send, peek } = useActor(fragile, name);
-  const [messageIds, setMessageIds] = useState<string[]>([]);
-
-  const sendTracked = async (
-    ...args: Parameters<typeof send>
-  ) => {
-    const id = await send(...args);
-    setMessageIds((prev) => [id, ...prev].slice(0, 8));
-  };
-
-  const processed = peek?.processed ?? 0;
-
-  return (
-    <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-mono font-semibold text-gray-300">
-          fragile:{name}
-        </h3>
-        <span className="text-sm text-gray-400">
-          {processed} processed
-        </span>
-      </div>
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => void sendTracked("work", { value: "hello" })}
-          className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 rounded text-sm font-medium transition-colors"
-        >
-          Send "work"
-        </button>
-        <button
-          onClick={() => void sendTracked("crash", {})}
-          className="px-4 py-2 bg-red-800 hover:bg-red-700 rounded text-sm font-medium transition-colors"
-        >
-          Send "crash"
-        </button>
-      </div>
-      <p className="text-xs text-gray-500 mt-3">
-        "crash" throws every time. After 3 failed attempts it becomes a defect
-        response.
-      </p>
-      <ResponseLog messageIds={messageIds} />
-    </div>
-  );
-}
-
-// ── Ping Pong ────────────────────────────────────────────────────
-
-function PingPongPanel({ name }: { name: string }) {
-  const { peek } = useActor(pingPong, name);
-  const data = peek ?? { hits: 0, log: [] as string[] };
-
-  return (
-    <div className="flex-1 border border-gray-700 rounded-lg p-4 bg-gray-900">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="font-mono font-semibold text-gray-300">{name}</h3>
-        <span className="text-2xl font-bold tabular-nums">{data.hits}</span>
-      </div>
-      {data.log.length > 0 && (
-        <div className="flex flex-col gap-0.5">
-          {data.log.map((entry, i) => (
-            <span key={i} className="text-xs text-gray-500 font-mono">
-              {entry}
-            </span>
-          ))}
+        <div className="flex flex-col gap-1">
+          <label className="text-xs uppercase tracking-wide text-gray-500">
+            Description
+          </label>
+          <input
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className="bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm"
+          />
         </div>
-      )}
-    </div>
-  );
-}
-
-function PingPongDemo() {
-  const alice = useActor(pingPong, "alice");
-  const [rallies, setRallies] = useState(10);
-
-  const serve = async () => {
-    await alice.send("serve", { to: "bob", rallies });
-  };
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3">
-        <label className="text-sm text-gray-400">Rallies:</label>
-        <input
-          type="number"
-          value={rallies}
-          onChange={(e) => setRallies(Math.max(0, Number(e.target.value) || 0))}
-          className="w-20 bg-gray-800 border border-gray-600 rounded px-3 py-2 text-center text-sm"
-          min={0}
-        />
-        <button
-          onClick={() => void serve()}
-          className="px-4 py-2 bg-blue-700 hover:bg-blue-600 rounded text-sm font-medium transition-colors"
-        >
-          Serve to Alice
-        </button>
-      </div>
-      <div className="flex gap-4">
-        <PingPongPanel name="alice" />
-        <PingPongPanel name="bob" />
-      </div>
-    </div>
-  );
-}
-
-// ── Delayed Counter ──────────────────────────────────────────────
-
-type QueuedMsg = {
-  id: string;
-  by: number;
-  delay: number;
-  sentAt: number;
-};
-
-function DelayedCounterDemo() {
-  const { send, peek } = useActor(counter, "delayed");
-  const [queued, setQueued] = useState<QueuedMsg[]>([]);
-
-  const sendDelayed = async (by: number, delaySec: number) => {
-    const id = await send("inc", { by }, { after: delaySec * 1000 });
-    setQueued((prev) => [
-      ...prev,
-      { id, by, delay: delaySec, sentAt: Date.now() },
-    ].slice(-10));
-  };
-
-  const count = peek?.count ?? 0;
-
-  return (
-    <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-mono font-semibold text-gray-300">
-          counter:delayed
-        </h3>
-        <span className="text-4xl font-bold tabular-nums">{count}</span>
-      </div>
-
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex flex-col gap-1">
+          <label className="text-xs uppercase tracking-wide text-gray-500">
+            Image URL
+          </label>
+          <input
+            value={imageUrl}
+            onChange={(e) => setImageUrl(e.target.value)}
+            className="bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm font-mono"
+          />
+        </div>
+        <div className="flex items-end gap-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs uppercase tracking-wide text-gray-500">
+              Starting price
+            </label>
+            <input
+              type="number"
+              value={startingPrice}
+              onChange={(e) =>
+                setStartingPrice(Math.max(0, Number(e.target.value) || 0))
+              }
+              className="bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm w-28"
+              min={0}
+            />
+          </div>
           <button
-            onClick={() => void sendDelayed(1, 10)}
-            className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 rounded text-sm font-medium transition-colors"
+            disabled={busy}
+            onClick={onCreate}
+            className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 rounded text-sm font-medium transition-colors"
           >
-            +1 in 10s
+            {busy ? 'Creating…' : `List as ${SELLER}`}
           </button>
-          <button
-            onClick={() => void sendDelayed(10, 3)}
-            className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 rounded text-sm font-medium transition-colors"
-          >
-            +10 in 3s
-          </button>
-          <button
-            onClick={() => void sendDelayed(100, 1)}
-            className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 rounded text-sm font-medium transition-colors"
-          >
-            +100 in 1s
-          </button>
+          {errorMessage && (
+            <span className="text-xs text-red-400">{errorMessage}</span>
+          )}
         </div>
         <p className="text-xs text-gray-500">
-          Try clicking "+1 in 10s" first, then "+10 in 3s". The drain
-          reschedules to the earlier delivery time — the +10 fires first, then
-          the +1 still completes when its time comes. Both messages are
-          delivered.
+          Durations are compressed: 30s active, 10s going once, 10s going
+          twice. Bids during the going-phases trigger snipe protection.
         </p>
       </div>
-
-      {queued.length > 0 && (
-        <div className="mt-4 flex flex-col gap-1">
-          <p className="text-xs text-gray-500 uppercase tracking-wide">
-            Queued messages
-          </p>
-          {queued.map((q) => (
-            <QueuedRow key={q.id} msg={q} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
+    </details>
+  )
 }
 
-function QueuedRow({ msg }: { msg: QueuedMsg }) {
-  const resp = useActorResponse(msg.id);
-  const delivered = resp?.response?.kind === "success";
-
-  return (
-    <div className="flex items-center gap-2 text-sm">
-      <span className="font-mono text-xs text-gray-600 w-16">
-        +{msg.by} in {msg.delay}s
-      </span>
-      {delivered ? (
-        <span className="text-xs bg-emerald-900 text-emerald-300 px-2 py-0.5 rounded">
-          delivered
-        </span>
-      ) : (
-        <span className="text-xs text-gray-600 italic">
-          waiting...
-        </span>
-      )}
-    </div>
-  );
+type Listing = {
+  name: string
+  item: { title: string; imageUrl: string }
+  seller: string
+  phase:
+    | 'initializing'
+    | 'active'
+    | 'going_once'
+    | 'going_twice'
+    | 'settling'
+    | 'sold'
+    | 'expired'
+    | 'settlement_failed'
+  currentBid: { bidder: string; amount: number } | null
+  endsAt: number
 }
 
-// ── Countdown Timer ──────────────────────────────────────────────
-
-function CountdownDemo() {
-  const { send, peek } = useActor(countdown, "demo");
-  const [from, setFrom] = useState(5);
-  const [interval, setInterval_] = useState(1);
-
-  const data = peek ?? { remaining: 0, running: false, log: [] as string[] };
-
-  const start = async () => {
-    await send("start", { from, intervalMs: interval * 1000 });
-  };
-
+function AuctionCard({ listing }: { listing: Listing }) {
   return (
-    <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-mono font-semibold text-gray-300">
-          countdown:demo
-        </h3>
-        <div className="flex items-center gap-3">
-          {data.running && (
-            <span className="text-xs bg-cyan-900 text-cyan-300 px-2 py-1 rounded">
-              running
-            </span>
-          )}
-          <span className="text-4xl font-bold tabular-nums">
-            {data.remaining}
-          </span>
-        </div>
-      </div>
-      <div className="flex items-center gap-3">
-        <label className="text-sm text-gray-400">From:</label>
-        <input
-          type="number"
-          value={from}
-          onChange={(e) => setFrom(Math.max(1, Number(e.target.value) || 1))}
-          className="w-16 bg-gray-800 border border-gray-600 rounded px-3 py-2 text-center text-sm"
-          min={1}
-        />
-        <label className="text-sm text-gray-400">Every:</label>
-        <input
-          type="number"
-          value={interval}
-          onChange={(e) =>
-            setInterval_(Math.max(0.5, Number(e.target.value) || 1))
-          }
-          className="w-16 bg-gray-800 border border-gray-600 rounded px-3 py-2 text-center text-sm"
-          min={0.5}
-          step={0.5}
-        />
-        <span className="text-sm text-gray-500">sec</span>
-        <button
-          onClick={() => void start()}
-          className="px-4 py-2 bg-cyan-700 hover:bg-cyan-600 rounded text-sm font-medium transition-colors"
-          disabled={data.running}
-        >
-          Start
-        </button>
-      </div>
-      {data.log.length > 0 && (
-        <div className="mt-3 flex flex-col gap-0.5">
-          {data.log.map((entry, i) => (
-            <span key={i} className="text-xs text-gray-500 font-mono">
-              {entry}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Job Runner ──────────────────────────────────────────────────
-
-function JobRunnerDemo() {
-  const { send, peek } = useActor(jobRunner, "demo");
-  const [value, setValue] = useState("hello");
-
-  const data = peek ?? { pending: 0, completed: [], failed: [] };
-
-  return (
-    <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-mono font-semibold text-gray-300">
-          jobRunner:demo
-        </h3>
-        <div className="flex items-center gap-3">
-          {data.pending > 0 && (
-            <span className="text-xs bg-amber-900 text-amber-300 px-2 py-1 rounded">
-              {data.pending} pending
-            </span>
-          )}
-          <span className="text-sm text-gray-400">
-            {data.completed.length} done / {data.failed.length} failed
-          </span>
-        </div>
-      </div>
-      <div className="flex items-center gap-3 mb-3">
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm flex-1"
-          placeholder="Job value..."
-        />
-        <button
-          onClick={() => void send("dispatch", { worker: "w1", value })}
-          className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 rounded text-sm font-medium transition-colors"
-        >
-          Dispatch Work
-        </button>
-        <button
-          onClick={() => void send("dispatchCrash", { worker: "w-crash" })}
-          className="px-4 py-2 bg-red-800 hover:bg-red-700 rounded text-sm font-medium transition-colors"
-        >
-          Dispatch Crash
-        </button>
-      </div>
-      <p className="text-xs text-gray-500 mb-3">
-        "Dispatch Work" asks fragile:w1 to process the value — the echo comes
-        back via reply. "Dispatch Crash" asks fragile:w-crash to crash — after 3
-        retries the defect routes back to the runner.
-      </p>
-      {data.completed.length > 0 && (
-        <div className="mt-2">
-          <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">
-            Completed
-          </p>
-          {data.completed.map((c, i) => (
-            <div key={i} className="flex items-center gap-2 text-sm">
-              <span className="text-xs bg-emerald-900 text-emerald-300 px-2 py-0.5 rounded font-mono">
-                {c.job} → {c.echo}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-      {data.failed.length > 0 && (
-        <div className="mt-2">
-          <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">
-            Failed
-          </p>
-          {data.failed.map((f, i) => (
-            <div key={i} className="flex items-center gap-2 text-sm">
-              <span className="text-xs bg-red-900 text-red-300 px-2 py-0.5 rounded font-mono">
-                {f.job}: {f.error}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Transfer Saga ───────────────────────────────────────────────
-
-function TransferSagaDemo() {
-  const [sagaName, setSagaName] = useState("demo-tx-init");
-  const { peek: sagaPeek } = useActor(transferSaga, sagaName);
-  const sendRaw = useMutation(api.actorFunctions.send);
-  const { send: sendAlice, peek: alicePeek } = useActor(wallet, "saga-alice");
-  const { send: sendBob, peek: bobPeek } = useActor(wallet, "saga-bob");
-  const [amount, setAmount] = useState(25);
-
-  const saga = sagaPeek ?? {
-    phase: "idle",
-    currentStep: null,
-    completedSteps: [],
-    failReason: undefined,
-  };
-  const aliceBalance = alicePeek?.balance ?? 0;
-  const bobBalance = bobPeek?.balance ?? 0;
-
-  const startSaga = useCallback((from: string, to: string) => {
-    const name = `demo-tx-${crypto.randomUUID().slice(0, 8)}`;
-    setSagaName(name);
-    void sendRaw({
-      actorType: "transferSaga",
-      name,
-      msgType: "start",
-      payload: { from, to, amount },
-    });
-  }, [sendRaw, amount]);
-
-  const phaseColors: Record<string, string> = {
-    idle: "bg-gray-700 text-gray-300",
-    running: "bg-amber-900 text-amber-300",
-    completed: "bg-emerald-900 text-emerald-300",
-    failed: "bg-red-900 text-red-300",
-  };
-
-  return (
-    <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-mono font-semibold text-gray-300">
-          transferSaga:{sagaName}
-        </h3>
-        <span
-          className={`text-xs px-2 py-1 rounded font-mono ${phaseColors[saga.phase] ?? "bg-gray-700 text-gray-300"}`}
-        >
-          {saga.phase}
-          {saga.failReason ? `: ${saga.failReason}` : ""}
-        </span>
-      </div>
-
-      <div className="flex gap-4 mb-4">
-        <div className="flex-1 border border-gray-700 rounded-lg p-3 bg-gray-800">
-          <div className="flex items-center justify-between mb-2">
-            <span className="font-mono text-sm text-gray-300">
-              wallet:saga-alice
-            </span>
-            <span className="font-bold tabular-nums">
-              ${aliceBalance.toFixed(2)}
-            </span>
+    <Link
+      to="/auctions/$name"
+      params={{ name: listing.name }}
+      className="border border-gray-800 rounded-lg bg-gray-900 overflow-hidden hover:border-emerald-700 transition-colors flex flex-col"
+    >
+      <div className="aspect-[4/3] bg-gray-950 overflow-hidden">
+        {listing.item.imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          (<img
+            src={listing.item.imageUrl}
+            alt={listing.item.title}
+            className="w-full h-full object-cover"
+          />)
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-gray-600 text-xs">
+            no image
           </div>
-          <button
-            onClick={() => void sendAlice("deposit", { amount: 100 })}
-            className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
-          >
-            + $100
-          </button>
+        )}
+      </div>
+      <div className="p-4 flex-1 flex flex-col gap-2">
+        <div className="flex items-start justify-between gap-2">
+          <h3 className="font-semibold text-gray-100 truncate">
+            {listing.item.title || listing.name}
+          </h3>
+          <PhaseBadge phase={listing.phase} />
         </div>
-        <div className="flex-1 border border-gray-700 rounded-lg p-3 bg-gray-800">
-          <div className="flex items-center justify-between mb-2">
-            <span className="font-mono text-sm text-gray-300">
-              wallet:saga-bob
-            </span>
-            <span className="font-bold tabular-nums">
-              ${bobBalance.toFixed(2)}
-            </span>
-          </div>
-          <button
-            onClick={() => void sendBob("deposit", { amount: 100 })}
-            className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
-          >
-            + $100
-          </button>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <span className="text-sm text-gray-400">Transfer</span>
-        <span className="text-sm text-gray-500">$</span>
-        <input
-          type="number"
-          value={amount}
-          onChange={(e) => setAmount(Math.max(1, Number(e.target.value) || 1))}
-          className="w-20 bg-gray-800 border border-gray-600 rounded px-3 py-2 text-center text-sm"
-          min={1}
-        />
-        <button
-          onClick={() => startSaga("saga-alice", "saga-bob")}
-          className="px-3 py-2 bg-violet-700 hover:bg-violet-600 rounded text-sm font-medium transition-colors"
-        >
-          Alice → Bob (saga)
-        </button>
-        <button
-          onClick={() => startSaga("saga-bob", "saga-alice")}
-          className="px-3 py-2 bg-violet-700 hover:bg-violet-600 rounded text-sm font-medium transition-colors"
-        >
-          Bob → Alice (saga)
-        </button>
-      </div>
-      <p className="text-xs text-gray-500 mt-3">
-        The saga asks wallet A to withdraw, waits for the reply, then asks wallet
-        B to deposit. Each step is a typed ask/reply. Try transferring more than
-        available — the saga catches the fail reply and stops.
-      </p>
-    </div>
-  );
-}
-
-// ── Compensation Demo ──────────────────────────────────────────
-
-function CompensationDemo() {
-  const [sagaName, setSagaName] = useState("comp-init");
-  const { peek: sagaPeek } = useActor(multiTransfer, sagaName);
-  const sendRaw = useMutation(api.actorFunctions.send);
-
-  const { send: sendW1, peek: w1Peek } = useActor(wallet, "comp-alice");
-  const { send: sendW2, peek: w2Peek } = useActor(wallet, "comp-bob");
-  const { peek: targetPeek } = useActor(wallet, "comp-charlie");
-
-  const [amount, setAmount] = useState(50);
-
-  const saga = sagaPeek ?? {
-    phase: "idle",
-    currentStep: null,
-    completedSteps: [] as string[],
-    failReason: undefined,
-  };
-  const w1Balance = w1Peek?.balance ?? 0;
-  const w2Balance = w2Peek?.balance ?? 0;
-  const targetBalance = targetPeek?.balance ?? 0;
-
-  const startSaga = useCallback(() => {
-    const name = `comp-${crypto.randomUUID().slice(0, 8)}`;
-    setSagaName(name);
-    void sendRaw({
-      actorType: "multiTransfer",
-      name,
-      msgType: "start",
-      payload: {
-        sources: ["comp-alice", "comp-bob"],
-        target: "comp-charlie",
-        amount,
-      },
-    });
-  }, [sendRaw, amount]);
-
-  const phaseColor: Record<string, string> = {
-    idle: "bg-gray-700 text-gray-300",
-    running: "bg-amber-900 text-amber-300",
-    completed: "bg-emerald-900 text-emerald-300",
-    failed: "bg-red-900 text-red-300",
-  };
-
-  return (
-    <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-mono font-semibold text-gray-300">
-          multiTransfer:{sagaName}
-        </h3>
-        <span
-          className={`text-xs px-2 py-1 rounded font-mono ${phaseColor[saga.phase] ?? "bg-gray-700 text-gray-300"}`}
-        >
-          {saga.phase}
-          {saga.failReason ? `: ${saga.failReason}` : ""}
-        </span>
-      </div>
-
-      <div className="flex gap-3 mb-4">
-        {[
-          { label: "Alice (source 1)", balance: w1Balance, fund: () => void sendW1("deposit", { amount: 100 }) },
-          { label: "Bob (source 2)", balance: w2Balance, fund: () => void sendW2("deposit", { amount: 100 }) },
-          { label: "Charlie (target)", balance: targetBalance, fund: undefined },
-        ].map((w) => (
-          <div key={w.label} className="flex-1 border border-gray-700 rounded-lg p-3 bg-gray-800">
-            <div className="flex items-center justify-between mb-2">
-              <span className="font-mono text-xs text-gray-400">{w.label}</span>
-              <span className="font-bold tabular-nums">${w.balance.toFixed(2)}</span>
-            </div>
-            {w.fund && (
-              <button
-                onClick={w.fund}
-                className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
-              >
-                + $100
-              </button>
+        <p className="text-xs text-gray-500 font-mono">
+          seller: {listing.seller}
+        </p>
+        <div className="flex items-baseline justify-between mt-auto pt-2">
+          <div>
+            <p className="text-xs text-gray-500 uppercase tracking-wide">
+              Current bid
+            </p>
+            {listing.currentBid ? (
+              <p className="text-lg font-bold tabular-nums">
+                ${listing.currentBid.amount}
+                <span className="text-xs text-gray-500 font-normal ml-2">
+                  {listing.currentBid.bidder}
+                </span>
+              </p>
+            ) : (
+              <p className="text-gray-600 text-sm">—</p>
             )}
           </div>
-        ))}
-      </div>
-
-      {saga.phase === "failed" && (
-        <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded-lg text-sm">
-          <span className="text-red-400 font-medium">
-            {(saga.completedSteps?.length ?? 0) > 0 ? "Compensated!" : "Failed!"}
-          </span>
-          <span className="text-red-300 ml-2">
-            {(saga.completedSteps?.length ?? 0) > 0
-              ? `Withdraw failed at step ${(saga.completedSteps?.length ?? 0) + 1} — ${saga.completedSteps?.length} prior withdrawal(s) refunded.`
-              : `First withdraw failed (${saga.failReason}) — nothing to compensate.`}
-          </span>
+          <CountdownDisplay endsAt={listing.endsAt} phase={listing.phase} />
         </div>
-      )}
-
-      {(saga.completedSteps?.length ?? 0) > 0 && (
-        <div className="mb-4 text-xs text-gray-500 font-mono">
-          steps: {saga.completedSteps?.join(" → ")}
-        </div>
-      )}
-
-      <div className="flex items-center gap-3">
-        <span className="text-sm text-gray-400">Withdraw</span>
-        <span className="text-sm text-gray-500">$</span>
-        <input
-          type="number"
-          value={amount}
-          onChange={(e) => setAmount(Math.max(1, Number(e.target.value) || 1))}
-          className="w-20 bg-gray-800 border border-gray-600 rounded px-3 py-2 text-center text-sm"
-          min={1}
-        />
-        <span className="text-sm text-gray-400">from each → Charlie</span>
-        <button
-          onClick={startSaga}
-          className="px-3 py-2 bg-rose-700 hover:bg-rose-600 rounded text-sm font-medium transition-colors"
-        >
-          Run Saga
-        </button>
       </div>
-      <p className="text-xs text-gray-500 mt-3">
-        Withdraws ${amount} from Alice and ${amount} from Bob, deposits ${amount * 2} to Charlie.
-        Fund Alice but leave Bob empty, then run — Bob&apos;s withdraw fails and Alice&apos;s
-        withdrawal is automatically rolled back.
-      </p>
-    </div>
-  );
-}
-
-// ── Wallet Transfer ──────────────────────────────────────────────
-
-function WalletPanel({ name }: { name: string }) {
-  const { send, peek } = useActor(wallet, name);
-
-  const data = {
-    balance: peek?.balance ?? 0,
-    log: peek?.log ?? [],
-  };
-
-  return (
-    <div className="flex-1 border border-gray-700 rounded-lg p-4 bg-gray-800">
-      <div className="flex items-center justify-between mb-2">
-        <span className="font-mono text-sm text-gray-300">wallet:{name}</span>
-        <span className="font-bold tabular-nums text-xl">
-          ${data.balance.toFixed(2)}
-        </span>
-      </div>
-      <button
-        onClick={() => void send("deposit", { amount: 100 })}
-        className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 rounded text-xs font-medium transition-colors"
-      >
-        + $100
-      </button>
-      {data.log.length > 0 && (
-        <div className="mt-2 flex flex-col gap-0.5">
-          {data.log.map((entry, i) => (
-            <span
-              key={i}
-              className={`text-xs font-mono ${entry.startsWith("REJECTED") ? "text-amber-400" : "text-gray-500"}`}
-            >
-              {entry}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TransferDemo() {
-  const aliceW = useActor(wallet, "alice-w");
-  const bobW = useActor(wallet, "bob-w");
-  const [amount, setAmount] = useState(30);
-  const [messageIds, setMessageIds] = useState<string[]>([]);
-
-  const doTransfer = async (
-    sender: { send: typeof aliceW.send },
-    to: string,
-    amt: number,
-  ) => {
-    const id = await sender.send("transfer", { to, amount: amt });
-    setMessageIds((prev) => [id, ...prev].slice(0, 8));
-  };
-
-  return (
-    <div className="border border-gray-700 rounded-lg p-6 bg-gray-900">
-      <div className="flex gap-4 mb-4">
-        <WalletPanel name="alice-w" />
-        <WalletPanel name="bob-w" />
-      </div>
-      <div className="flex items-center gap-3 mb-3">
-        <span className="text-sm text-gray-400">Transfer</span>
-        <span className="text-sm text-gray-500">$</span>
-        <input
-          type="number"
-          value={amount}
-          onChange={(e) => setAmount(Math.max(1, Number(e.target.value) || 1))}
-          className="w-20 bg-gray-800 border border-gray-600 rounded px-3 py-2 text-center text-sm"
-          min={1}
-        />
-        <button
-          onClick={() => void doTransfer(aliceW, "bob-w", amount)}
-          className="px-3 py-2 bg-violet-700 hover:bg-violet-600 rounded text-sm font-medium transition-colors"
-        >
-          Alice -&gt; Bob
-        </button>
-        <button
-          onClick={() => void doTransfer(bobW, "alice-w", amount)}
-          className="px-3 py-2 bg-violet-700 hover:bg-violet-600 rounded text-sm font-medium transition-colors"
-        >
-          Bob -&gt; Alice
-        </button>
-      </div>
-      <p className="text-xs text-gray-500 mb-3">
-        The transfer message goes directly to the source wallet. Balance check +
-        debit + send deposit all happen in one handler — atomic, no races. Try
-        transferring more than available.
-      </p>
-      <ResponseLog messageIds={messageIds} />
-    </div>
-  );
+    </Link>
+  )
 }

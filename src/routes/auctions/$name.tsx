@@ -23,10 +23,7 @@ function AuctionDetail() {
     <main className="min-h-screen bg-gray-950 text-gray-100 p-8">
       <div className="max-w-4xl mx-auto flex flex-col gap-6">
         <header>
-          <Link
-            to="/auctions"
-            className="text-sm text-gray-400 hover:text-gray-100"
-          >
+          <Link to="/" className="text-sm text-gray-400 hover:text-gray-100">
             ← Lobby
           </Link>
         </header>

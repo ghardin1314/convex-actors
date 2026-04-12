@@ -9,24 +9,12 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as AnotherPageRouteImport } from './routes/anotherPage'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AuctionsIndexRouteImport } from './routes/auctions/index'
 import { Route as AuctionsNameRouteImport } from './routes/auctions/$name'
 
-const AnotherPageRoute = AnotherPageRouteImport.update({
-  id: '/anotherPage',
-  path: '/anotherPage',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuctionsIndexRoute = AuctionsIndexRouteImport.update({
-  id: '/auctions/',
-  path: '/auctions/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuctionsNameRoute = AuctionsNameRouteImport.update({
@@ -37,59 +25,37 @@ const AuctionsNameRoute = AuctionsNameRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/anotherPage': typeof AnotherPageRoute
   '/auctions/$name': typeof AuctionsNameRoute
-  '/auctions/': typeof AuctionsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/anotherPage': typeof AnotherPageRoute
   '/auctions/$name': typeof AuctionsNameRoute
-  '/auctions': typeof AuctionsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/anotherPage': typeof AnotherPageRoute
   '/auctions/$name': typeof AuctionsNameRoute
-  '/auctions/': typeof AuctionsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/anotherPage' | '/auctions/$name' | '/auctions/'
+  fullPaths: '/' | '/auctions/$name'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/anotherPage' | '/auctions/$name' | '/auctions'
-  id: '__root__' | '/' | '/anotherPage' | '/auctions/$name' | '/auctions/'
+  to: '/' | '/auctions/$name'
+  id: '__root__' | '/' | '/auctions/$name'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AnotherPageRoute: typeof AnotherPageRoute
   AuctionsNameRoute: typeof AuctionsNameRoute
-  AuctionsIndexRoute: typeof AuctionsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/anotherPage': {
-      id: '/anotherPage'
-      path: '/anotherPage'
-      fullPath: '/anotherPage'
-      preLoaderRoute: typeof AnotherPageRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/auctions/': {
-      id: '/auctions/'
-      path: '/auctions'
-      fullPath: '/auctions/'
-      preLoaderRoute: typeof AuctionsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auctions/$name': {
@@ -104,9 +70,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AnotherPageRoute: AnotherPageRoute,
   AuctionsNameRoute: AuctionsNameRoute,
-  AuctionsIndexRoute: AuctionsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

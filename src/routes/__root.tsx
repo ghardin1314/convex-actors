@@ -89,13 +89,6 @@ function TopNav() {
             activeOptions={{ exact: true }}
             activeProps={{ className: 'text-emerald-300 font-semibold' }}
           >
-            framework demos
-          </Link>
-          <Link
-            to="/auctions"
-            className="hover:text-gray-100"
-            activeProps={{ className: 'text-emerald-300 font-semibold' }}
-          >
             auction house
           </Link>
         </div>

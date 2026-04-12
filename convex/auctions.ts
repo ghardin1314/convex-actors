@@ -2,9 +2,7 @@
  * App-owned API for the auction house demo. Phase 3 of DEMO.md.
  *
  * The UI never talks to the actor framework directly — it goes through
- * the typed queries and mutations defined here. The framework's generic
- * `actorFunctions.{send,peek,getResponse}` stays around for the debug
- * panel only.
+ * the typed queries and mutations defined here.
  *
  * This is a demo — there is no auth. The caller passes `user` on every
  * endpoint that needs a caller identity.
