@@ -356,6 +356,7 @@ describe("enqueueMessageHandler", () => {
         actorId: actor._id,
         generation: 0,
         executeFn,
+        cursorTs: T0 + 500,
       });
     });
   });

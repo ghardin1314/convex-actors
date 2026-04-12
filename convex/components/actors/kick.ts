@@ -87,6 +87,7 @@ export async function kickMailbox(
       actorId: args.actorId,
       generation: signal.generation,
       executeFn: args.executeFn,
+      cursorTs: deliverAt,
       logLevel: args.logLevel,
     },
   )

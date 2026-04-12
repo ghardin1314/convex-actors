@@ -86,6 +86,7 @@ async function drainUntilIdle(
       actorId: info.actorId,
       generation: info.generation,
       executeFn,
+      cursorTs: Date.now(),
     });
   }
 }

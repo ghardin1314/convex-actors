@@ -1,8 +1,15 @@
 /**
- * Component-level drain loop. All control flow lives directly in the
- * drainLoop handler. `handleTransition` is factored out as a
- * self-contained scheduling state machine — it does work (queries +
- * scheduling) and returns the new drain state.
+ * Component-level drain loop with frozen-cursor architecture.
+ *
+ * `drainLoop` receives a fixed `cursorTs` that caps its query range —
+ * it only reads `pendingMessages` where `deliverAt <= cursorTs`. This
+ * guarantees the scan range is identical across retries and disjoint
+ * from concurrent enqueue inserts (which land at `deliverAt >= now()`).
+ *
+ * When the cursor range is exhausted, `drainLoop` delegates to
+ * `updateDrainStatus` — a lightweight mutation that does the open-ended
+ * query in its own transaction so OCC conflicts there don't retry the
+ * processing transaction.
  */
 import { v } from 'convex/values'
 import { internal } from './_generated/api.js'
@@ -69,77 +76,24 @@ type BookkeepingPatch = Pick<
 >
 
 /**
- * After processing (or finding nothing to process), decide what's next
- * and schedule accordingly. Returns the new drain state — the caller
- * writes it to `drainSignal` + `drainBookkeeping`.
- *
- * - More deliverable rows → schedule immediately, stay running
- * - Only future rows → schedule at deliverAt, transition to scheduled
- * - No rows → transition to idle
+ * Validate generation and load the signal + bookkeeping rows for an
+ * actor. Throws on missing rows or stale generation.
  */
-async function handleTransition(
+async function loadDrainState(
   ctx: MutationCtx,
   actorId: Id<'actor'>,
   generation: number,
-  executeFn: string,
-  level?: LogLevel,
-): Promise<{ signal: SignalPatch; bookkeeping: BookkeepingPatch }> {
-  const t = now()
-
-  const nextDeliverable = await ctx.db
-    .query('pendingMessages')
-    .withIndex('by_actor_deliverable', (q) =>
-      q.eq('actorId', actorId).lte('deliverAt', t),
+): Promise<{ signal: Doc<'drainSignal'>; bookkeeping: Doc<'drainBookkeeping'> }> {
+  const signal = await getSignalRow(ctx, actorId)
+  if (!signal) throw new Error(`no drainSignal for actor ${actorId}`)
+  if (signal.generation !== generation) {
+    throw new Error(
+      `stale drain: generation ${generation} !== ${signal.generation}`,
     )
-    .first()
-
-  if (nextDeliverable) {
-    await ctx.scheduler.runAfter(0, internal.drain.drainLoop, {
-      actorId,
-      generation,
-      executeFn,
-      logLevel: level,
-    })
-    return {
-      signal: { drainKind: 'running' },
-      bookkeeping: {
-        drainStartedAt: t,
-        drainScheduledId: undefined,
-        drainAt: undefined,
-      },
-    }
   }
-
-  const nextFuture = await ctx.db
-    .query('pendingMessages')
-    .withIndex('by_actor_deliverable', (q) => q.eq('actorId', actorId))
-    .first()
-
-  if (nextFuture) {
-    const deliverAt = boundScheduledTime(nextFuture.deliverAt)
-    const scheduledId = await ctx.scheduler.runAt(
-      deliverAt,
-      internal.drain.drainLoop,
-      { actorId, generation, executeFn, logLevel: level },
-    )
-    return {
-      signal: { drainKind: 'scheduled' },
-      bookkeeping: {
-        drainScheduledId: scheduledId,
-        drainAt: deliverAt,
-        drainStartedAt: undefined,
-      },
-    }
-  }
-
-  return {
-    signal: { drainKind: 'idle' },
-    bookkeeping: {
-      drainScheduledId: undefined,
-      drainAt: undefined,
-      drainStartedAt: undefined,
-    },
-  }
+  const bookkeeping = await getBookkeepingRow(ctx, actorId)
+  if (!bookkeeping) throw new Error(`no drainBookkeeping for actor ${actorId}`)
+  return { signal, bookkeeping }
 }
 
 export const drainLoop = internalMutation({
@@ -147,45 +101,40 @@ export const drainLoop = internalMutation({
     actorId: v.id('actor'),
     generation: v.number(),
     executeFn: v.string(),
+    cursorTs: v.number(),
     logLevel: v.optional(logLevel),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const signal = await getSignalRow(ctx, args.actorId)
-    if (!signal) throw new Error(`no drainSignal for actor ${args.actorId}`)
-    if (signal.generation !== args.generation) {
-      throw new Error(
-        `stale drain: generation ${args.generation} !== ${signal.generation}`,
-      )
-    }
-    const bookkeeping = await getBookkeepingRow(ctx, args.actorId)
-    if (!bookkeeping) throw new Error(`no drainBookkeeping for actor ${args.actorId}`)
-
+    const { signal, bookkeeping } = await loadDrainState(ctx, args.actorId, args.generation)
     const generation = args.generation + 1
     const logger = createLogger(args.logLevel)
 
     const actor = await ctx.db.get(args.actorId)
     if (!actor) throw new Error(`actor row ${args.actorId} missing`)
 
-    // ── Read next deliverable pending message ───────────────
-    const t = now()
+    // ── Read next deliverable pending message (frozen cursor) ──
     const pending = await ctx.db
       .query('pendingMessages')
       .withIndex('by_actor_deliverable', (q) =>
-        q.eq('actorId', args.actorId).lte('deliverAt', t),
+        q.eq('actorId', args.actorId).lte('deliverAt', args.cursorTs),
       )
       .first()
 
     if (!pending) {
-      const transition = await handleTransition(
-        ctx,
-        args.actorId,
+      // Cursor range exhausted → delegate to updateDrainStatus
+      await ctx.scheduler.runAfter(0, internal.drain.updateDrainStatus, {
+        actorId: args.actorId,
         generation,
-        args.executeFn,
-        args.logLevel,
-      )
-      await ctx.db.patch(signal._id, { generation, ...transition.signal })
-      await ctx.db.patch(bookkeeping._id, transition.bookkeeping)
+        executeFn: args.executeFn,
+        logLevel: args.logLevel,
+      })
+      await ctx.db.patch(signal._id, { generation, drainKind: 'running' })
+      await ctx.db.patch(bookkeeping._id, {
+        drainStartedAt: now(),
+        drainScheduledId: undefined,
+        drainAt: undefined,
+      })
       return null
     }
 
@@ -225,15 +174,7 @@ export const drainLoop = internalMutation({
         args.logLevel,
       )
       await ctx.db.delete(pending._id)
-      const transition = await handleTransition(
-        ctx,
-        args.actorId,
-        generation,
-        args.executeFn,
-        args.logLevel,
-      )
-      await ctx.db.patch(signal._id, { generation, ...transition.signal })
-      await ctx.db.patch(bookkeeping._id, transition.bookkeeping)
+      await scheduleNextOrDelegate(ctx, args, signal._id, bookkeeping._id, generation)
       return null
     }
 
@@ -241,7 +182,7 @@ export const drainLoop = internalMutation({
     recordStarted(logger, {
       ...eventBase,
       attempts: pending.attempts,
-      lagMs: t - pending.deliverAt,
+      lagMs: now() - pending.deliverAt,
     })
     const result = await ctx.runMutation(args.executeFn as ExecuteFnHandle, {
       actorType: actor.actorType,
@@ -305,6 +246,7 @@ export const drainLoop = internalMutation({
       )
       await ctx.db.delete(pending._id)
     } else {
+      // Defect outcome
       const newAttempts = pending.attempts + 1
       if (newAttempts >= MAX_ATTEMPTS) {
         recordCompleted(logger, { ...eventBase, outcome: 'defect', attempts: newAttempts })
@@ -331,16 +273,139 @@ export const drainLoop = internalMutation({
       }
     }
 
-    // ── Transition ──────────────────────────────────────────
-    const transition = await handleTransition(
-      ctx,
-      args.actorId,
-      generation,
-      args.executeFn,
-      args.logLevel,
+    // ── Schedule next or delegate ───────────────────────────
+    await scheduleNextOrDelegate(ctx, args, signal._id, bookkeeping._id, generation)
+    return null
+  },
+})
+
+/**
+ * After processing a message, check if more work exists within the
+ * frozen cursor range. If so, self-schedule drainLoop with the same
+ * cursorTs. Otherwise, delegate to updateDrainStatus for an open-ended
+ * check in a separate transaction.
+ */
+async function scheduleNextOrDelegate(
+  ctx: MutationCtx,
+  args: { actorId: Id<'actor'>; cursorTs: number; executeFn: string; logLevel?: LogLevel },
+  signalId: Id<'drainSignal'>,
+  bookkeepingId: Id<'drainBookkeeping'>,
+  generation: number,
+) {
+  const moreInRange = await ctx.db
+    .query('pendingMessages')
+    .withIndex('by_actor_deliverable', (q) =>
+      q.eq('actorId', args.actorId).lte('deliverAt', args.cursorTs),
     )
-    await ctx.db.patch(signal._id, { generation, ...transition.signal })
-    await ctx.db.patch(bookkeeping._id, transition.bookkeeping)
+    .first()
+
+  if (moreInRange) {
+    // More work in cursor range → self-schedule with same cursorTs
+    await ctx.scheduler.runAfter(0, internal.drain.drainLoop, {
+      actorId: args.actorId,
+      generation,
+      executeFn: args.executeFn,
+      cursorTs: args.cursorTs,
+      logLevel: args.logLevel,
+    })
+    await ctx.db.patch(signalId, { generation, drainKind: 'running' })
+    await ctx.db.patch(bookkeepingId, {
+      drainStartedAt: now(),
+      drainScheduledId: undefined,
+      drainAt: undefined,
+    })
+  } else {
+    // Cursor range exhausted → delegate to updateDrainStatus
+    await ctx.scheduler.runAfter(0, internal.drain.updateDrainStatus, {
+      actorId: args.actorId,
+      generation,
+      executeFn: args.executeFn,
+      logLevel: args.logLevel,
+    })
+    await ctx.db.patch(signalId, { generation, drainKind: 'running' })
+    await ctx.db.patch(bookkeepingId, {
+      drainStartedAt: now(),
+      drainScheduledId: undefined,
+      drainAt: undefined,
+    })
+  }
+}
+
+/**
+ * Lightweight follow-up mutation. Only runs when drainLoop exhausts its
+ * cursor range. Does an open-ended pendingMessages query in its own
+ * transaction so OCC conflicts here don't retry the processing
+ * transaction.
+ */
+export const updateDrainStatus = internalMutation({
+  args: {
+    actorId: v.id('actor'),
+    generation: v.number(),
+    executeFn: v.string(),
+    logLevel: v.optional(logLevel),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { signal, bookkeeping } = await loadDrainState(ctx, args.actorId, args.generation)
+
+    const t = now()
+
+    // Open-ended query: any pendingMessages for this actor?
+    const next = await ctx.db
+      .query('pendingMessages')
+      .withIndex('by_actor_deliverable', (q) => q.eq('actorId', args.actorId))
+      .first()
+
+    let signalPatch: SignalPatch
+    let bookkeepingPatch: BookkeepingPatch
+
+    if (next && next.deliverAt <= t) {
+      // Deliverable now → schedule drainLoop immediately with cursorTs = now()
+      await ctx.scheduler.runAfter(0, internal.drain.drainLoop, {
+        actorId: args.actorId,
+        generation: args.generation,
+        executeFn: args.executeFn,
+        cursorTs: t,
+        logLevel: args.logLevel,
+      })
+      signalPatch = { drainKind: 'running' }
+      bookkeepingPatch = {
+        drainStartedAt: t,
+        drainScheduledId: undefined,
+        drainAt: undefined,
+      }
+    } else if (next) {
+      // Future message → schedule drainLoop at deliverAt
+      const deliverAt = boundScheduledTime(next.deliverAt)
+      const scheduledId = await ctx.scheduler.runAt(
+        deliverAt,
+        internal.drain.drainLoop,
+        {
+          actorId: args.actorId,
+          generation: args.generation,
+          executeFn: args.executeFn,
+          cursorTs: deliverAt,
+          logLevel: args.logLevel,
+        },
+      )
+      signalPatch = { drainKind: 'scheduled' }
+      bookkeepingPatch = {
+        drainScheduledId: scheduledId,
+        drainAt: deliverAt,
+        drainStartedAt: undefined,
+      }
+    } else {
+      // No messages → idle
+      signalPatch = { drainKind: 'idle' }
+      bookkeepingPatch = {
+        drainScheduledId: undefined,
+        drainAt: undefined,
+        drainStartedAt: undefined,
+      }
+    }
+
+    await ctx.db.patch(signal._id, signalPatch)
+    await ctx.db.patch(bookkeeping._id, bookkeepingPatch)
     return null
   },
 })

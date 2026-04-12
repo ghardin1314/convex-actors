@@ -60,6 +60,7 @@ describe('kickMailbox', () => {
         actorId: actor._id,
         generation: 0,
         executeFn,
+        cursorTs: deliverAt,
       })
     })
   })
@@ -265,6 +266,7 @@ describe('kickMailbox', () => {
         actorId: actor._id,
         generation: 0,
         executeFn,
+        cursorTs: T0 + 1000,
       })
     })
   })
