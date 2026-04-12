@@ -1,12 +1,9 @@
 import { z } from "zod";
 import { describe, expect, test } from "vitest";
 
-import {
-  createActorCtx,
-  FailSentinel,
-  type EffectDescriptor,
-} from "./ctx.js";
-import { defineActor, reply, type AnyActorDefinition } from "./defineActor.js";
+import { createProcessCtx, FailSentinel } from "./ctx.js";
+import type { Effect } from "../shared.js";
+import { defineActor, reply } from "./defineActor.js";
 
 const T0 = 1_700_000_000_000;
 
@@ -82,10 +79,14 @@ const saga = defineActor({
   handle: {
     start: async (state, { target, amount }, ctx) => {
       state.phase = "withdrawing";
-      ctx.ask(wallet, target, "withdraw", { amount }, {
-        handler: "withdrawResult",
-        context: { target },
-      });
+      ctx.stub(wallet, target).ask(
+        "withdraw",
+        { amount },
+        {
+          handler: "withdrawResult",
+          context: { target },
+        },
+      );
     },
     withdrawResult: async (state, { result }) => {
       state.phase = result.kind === "success" ? "done" : "failed";
@@ -93,29 +94,23 @@ const saga = defineActor({
   },
 });
 
-const defs: Record<string, AnyActorDefinition> = { counter, inbox, wallet, saga };
-
 function makeCtx(
-  overrides?: Partial<Parameters<typeof createActorCtx>[0]>,
+  overrides?: Partial<Parameters<typeof createProcessCtx>[0]>,
 ) {
-  return createActorCtx({
-    selfType: "counter",
+  return createProcessCtx({
+    selfDefinition: counter,
     selfName: "a",
     now: T0,
     peekFn: async () => null,
-    getDefinition: (t) => {
-      const d = defs[t];
-      if (!d) throw new Error(`unknown type ${t}`);
-      return d;
-    },
     ...overrides,
   });
 }
 
-describe("ActorCtx", () => {
-  test("self() returns the current actor address", () => {
+describe("InternalProcessCtx", () => {
+  test("self carries the current process address", () => {
     const { ctx } = makeCtx();
-    expect(ctx.self()).toEqual({ type: "counter", name: "a" });
+    expect(ctx.self.type).toBe("counter");
+    expect(ctx.self.name).toBe("a");
   });
 
   test("now() returns the stable timestamp", () => {
@@ -134,7 +129,7 @@ describe("ActorCtx", () => {
       msgType: "notify",
       payload: { text: "hello" },
       deliverAt: T0,
-    } satisfies EffectDescriptor);
+    } satisfies Effect);
   });
 
   test("multiple stub.send calls accumulate in order", () => {
@@ -158,16 +153,6 @@ describe("ActorCtx", () => {
     expect(internals.effects[0].deliverAt).toBe(T0 + 5000);
   });
 
-  test("stub.send with opts.at wins over opts.after", () => {
-    const { ctx, internals } = makeCtx();
-    const future = T0 + 10_000;
-    ctx.stub(inbox, "a").send("notify", { text: "x" }, {
-      at: future,
-      after: 500,
-    });
-    expect(internals.effects[0].deliverAt).toBe(future);
-  });
-
   test("stub.send throws on unknown msgType", () => {
     const { ctx } = makeCtx();
     expect(() =>
@@ -186,16 +171,19 @@ describe("ActorCtx", () => {
 
   test("stub.peek calls the injected peekFn", async () => {
     const { ctx } = makeCtx({
-      peekFn: async (type, name) => ({ type, name, peeked: true }),
+      peekFn: async (type: string, name: string) => ({
+        type,
+        name,
+        peeked: true,
+      }),
     });
     const result = await ctx.stub(inbox, "user1").peek();
     expect(result).toEqual({ type: "inbox", name: "user1", peeked: true });
   });
 
-  test("sendSelf pushes an effect targeting self", () => {
+  test("self.send pushes an effect targeting self", () => {
     const { ctx, internals } = makeCtx();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (ctx as any).sendSelf("inc", { by: 3 });
+    ctx.self.send("inc", { by: 3 });
     expect(internals.effects).toHaveLength(1);
     expect(internals.effects[0]).toEqual({
       actorType: "counter",
@@ -206,20 +194,18 @@ describe("ActorCtx", () => {
     });
   });
 
-  test("sendSelf throws on unknown msgType", () => {
+  test("self.send throws on unknown msgType", () => {
     const { ctx } = makeCtx();
-    expect(() =>
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (ctx as any).sendSelf("bogus", {}),
-    ).toThrow(/unknown msgType "bogus"/);
+    expect(() => ctx.self.send("bogus", {})).toThrow(
+      /unknown msgType "bogus"/,
+    );
   });
 
-  test("sendSelf throws on invalid payload", () => {
+  test("self.send throws on invalid payload", () => {
     const { ctx } = makeCtx();
-    expect(() =>
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (ctx as any).sendSelf("inc", { by: "not a number" }),
-    ).toThrow(/invalid payload/);
+    expect(() => ctx.self.send("inc", { by: "not a number" })).toThrow(
+      /invalid payload/,
+    );
   });
 
   test("fail throws a FailSentinel with reason and details", () => {
@@ -247,41 +233,38 @@ describe("ActorCtx", () => {
     expect(caught!.details).toBeUndefined();
   });
 
-  test("effects list starts empty and is shared across stubs", () => {
+  test("effects list starts empty and is shared across stubs + self", () => {
     const { ctx, internals } = makeCtx();
     expect(internals.effects).toHaveLength(0);
     ctx.stub(inbox, "a").send("notify", { text: "1" });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (ctx as any).sendSelf("inc", { by: 1 });
+    ctx.self.send("inc", { by: 1 });
     expect(internals.effects).toHaveLength(2);
   });
 });
 
-describe("ask()", () => {
+describe("pushAsk / ActorStub.ask", () => {
   function makeSagaCtx(
-    overrides?: Partial<Parameters<typeof createActorCtx>[0]>,
+    overrides?: Partial<Parameters<typeof createProcessCtx>[0]>,
   ) {
-    return createActorCtx({
-      selfType: "saga",
+    return createProcessCtx({
+      selfDefinition: saga,
       selfName: "saga-1",
       now: T0,
       peekFn: async () => null,
-      getDefinition: (t) => {
-        const d = defs[t];
-        if (!d) throw new Error(`unknown type ${t}`);
-        return d;
-      },
       ...overrides,
     });
   }
 
-  test("ask pushes an effect with replyTo metadata", () => {
+  test("pushAsk emits an effect with replyTo metadata", () => {
     const { ctx, internals } = makeSagaCtx();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (ctx as any).ask(wallet, "alice", "withdraw", { amount: 50 }, {
-      handler: "withdrawResult",
-      context: { target: "alice" },
-    });
+    ctx.pushAsk(
+      wallet,
+      "alice",
+      "withdraw",
+      { amount: 50 },
+      "withdrawResult",
+      { target: "alice" },
+    );
     expect(internals.effects).toHaveLength(1);
     const effect = internals.effects[0];
     expect(effect.actorType).toBe("wallet");
@@ -297,8 +280,7 @@ describe("ask()", () => {
     });
   });
 
-  test("ask without context sets replyTo.context to null", () => {
-    // Create a saga that uses reply without context
+  test("pushAsk with null context preserves the null", () => {
     const simpleSaga = defineActor({
       type: "simpleSaga",
       state: z.object({ phase: z.string() }),
@@ -312,55 +294,81 @@ describe("ask()", () => {
         depositResult: async () => {},
       },
     });
-    const allDefs: Record<string, AnyActorDefinition> = { ...defs, simpleSaga };
-    const { ctx, internals } = createActorCtx({
-      selfType: "simpleSaga",
+    const { ctx, internals } = createProcessCtx({
+      selfDefinition: simpleSaga,
       selfName: "s1",
       now: T0,
       peekFn: async () => null,
-      getDefinition: (t) => {
-        const d = allDefs[t];
-        if (!d) throw new Error(`unknown type ${t}`);
-        return d;
-      },
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (ctx as any).ask(wallet, "bob", "deposit", { amount: 10 }, {
-      handler: "depositResult",
-    });
+    ctx.pushAsk(
+      wallet,
+      "bob",
+      "deposit",
+      { amount: 10 },
+      "depositResult",
+      null,
+    );
     expect(internals.effects[0].replyTo?.context).toBeNull();
   });
 
-  test("ask validates target message payload", () => {
+  test("pushAsk validates target message payload", () => {
     const { ctx } = makeSagaCtx();
     expect(() =>
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (ctx as any).ask(wallet, "alice", "withdraw", { amount: "bad" }, {
-        handler: "withdrawResult",
-        context: { target: "alice" },
-      }),
+      ctx.pushAsk(
+        wallet,
+        "alice",
+        "withdraw",
+        { amount: "bad" },
+        "withdrawResult",
+        { target: "alice" },
+      ),
     ).toThrow(/invalid payload/);
   });
 
-  test("ask throws on unknown target msgType", () => {
+  test("pushAsk throws on unknown target msgType", () => {
     const { ctx } = makeSagaCtx();
     expect(() =>
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (ctx as any).ask(wallet, "alice", "bogus", {}, {
-        handler: "withdrawResult",
-        context: { target: "alice" },
-      }),
+      ctx.pushAsk(
+        wallet,
+        "alice",
+        "bogus",
+        {},
+        "withdrawResult",
+        { target: "alice" },
+      ),
     ).toThrow(/unknown msgType "bogus"/);
   });
 
-  test("ask throws on unknown reply handler", () => {
+  test("pushAsk throws on unknown reply handler", () => {
     const { ctx } = makeSagaCtx();
     expect(() =>
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (ctx as any).ask(wallet, "alice", "withdraw", { amount: 10 }, {
-        handler: "nonexistent",
-        context: { target: "alice" },
-      }),
+      ctx.pushAsk(
+        wallet,
+        "alice",
+        "withdraw",
+        { amount: 10 },
+        "nonexistent",
+        { target: "alice" },
+      ),
     ).toThrow(/unknown reply handler "nonexistent"/);
+  });
+
+  test("ActorStub.ask wraps pushAsk behind the typed surface", () => {
+    // Calling through the user-facing actor stub should produce the
+    // same effect shape that pushAsk does directly.
+    const { ctx, internals } = makeSagaCtx();
+    // Run the wrapped saga.start handler — it calls
+    // ctx.stub(wallet, 'alice').ask('withdraw', ...) inside.
+    saga.handle.start(
+      { phase: "init" },
+      { target: "alice", amount: 50 },
+      ctx,
+    );
+    expect(internals.effects).toHaveLength(1);
+    const effect = internals.effects[0];
+    expect(effect.actorType).toBe("wallet");
+    expect(effect.msgType).toBe("withdraw");
+    expect(effect.replyTo?.handler).toBe("withdrawResult");
+    expect(effect.replyTo?.context).toEqual({ target: "alice" });
   });
 });

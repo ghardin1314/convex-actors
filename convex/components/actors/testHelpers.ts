@@ -9,8 +9,8 @@ import { createDraft, finishDraft } from "immer";
 import { internalMutation } from "./_generated/server.js";
 import { getActorRow } from "./actors.js";
 import { defineActor } from "./client/defineActor.js";
-import { createActorCtx, FailSentinel } from "./client/ctx.js";
-import type { AnyActorDefinition } from "./client/defineActor.js";
+import { createProcessCtx, FailSentinel } from "./client/ctx.js";
+import type { AnyProcess } from "./client/defineProcess.js";
 
 // ── Test actor definitions ───────────────────────────────────────
 
@@ -75,14 +75,14 @@ export const senderActor = defineActor({
 
 // ── Execute mutation ─────────────────────────────────────────────
 
-const defs: Record<string, AnyActorDefinition> = {
+const defs: Record<string, AnyProcess> = {
   counter,
   failActor,
   throwActor,
   senderActor,
 };
 
-const defsByType = new Map<string, AnyActorDefinition>();
+const defsByType = new Map<string, AnyProcess>();
 for (const def of Object.values(defs)) {
   defsByType.set(def.type, def);
 }
@@ -115,8 +115,8 @@ export const testExecute = internalMutation({
         ? actor.state
         : def.initialState();
 
-    const { ctx: actorCtx, internals } = createActorCtx({
-      selfType: args.actorType,
+    const { ctx: processCtx, internals } = createProcessCtx({
+      selfDefinition: def,
       selfName: args.actorName,
       now: Date.now(),
       peekFn: async (actorType, name) => {
@@ -126,16 +126,11 @@ export const testExecute = internalMutation({
         if (!targetDef?.project) return null;
         return targetDef.project(target.state);
       },
-      getDefinition: (t) => {
-        const d = defsByType.get(t);
-        if (!d) throw new Error(`unknown actor type "${t}"`);
-        return d;
-      },
     });
 
     try {
       const draft = createDraft(currentState);
-      internals.returnValue = await handler(draft, args.payload, actorCtx);
+      internals.returnValue = await handler(draft, args.payload, processCtx);
       const nextState = finishDraft(draft);
       const response =
         internals.returnValue === undefined ? null : internals.returnValue;

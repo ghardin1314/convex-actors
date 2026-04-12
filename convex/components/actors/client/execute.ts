@@ -1,25 +1,30 @@
 /**
  * App-level execute function factory. The component's drain loop calls
- * this via function handle to invoke the actor handler. Execute resolves
- * the definition, runs the handler inside Immer, and returns the outcome.
- * All commits happen in the component drain loop, not here.
+ * this via function handle to invoke a process handler. Execute
+ * resolves the definition, runs the handler inside Immer, and returns
+ * the outcome. All commits happen in the component drain loop, not
+ * here.
+ *
+ * Kind-agnostic: operates on `ProcessDefinition`, which both
+ * `ActorDefinition` and `SagaDefinition` extend.
  */
 import { createDraft, finishDraft } from "immer";
 import { internalMutationGeneric } from "convex/server";
 import { v } from "convex/values";
-import type { AnyActorDefinition } from "./defineActor";
-import { createActorCtx, FailSentinel } from "./ctx";
+import type { AnyProcess } from "./defineProcess";
+import { createProcessCtx, FailSentinel } from "./ctx";
 import type { ActorsComponent } from "./system";
+import type { ExecuteOutcome } from "../shared.js";
 
 /**
- * Build a lookup map from actor type string → definition.
- * The input defs record is keyed by JS identifier; the authoritative
- * lookup key is `definition.type`.
+ * Build a lookup map from actor type string → definition. The input
+ * `defs` record is keyed by JS identifier; the authoritative lookup
+ * key is `definition.type`.
  */
 function buildDefsByType(
-  defs: Record<string, AnyActorDefinition>,
-): Map<string, AnyActorDefinition> {
-  const m = new Map<string, AnyActorDefinition>();
+  defs: Record<string, AnyProcess>,
+): Map<string, AnyProcess> {
+  const m = new Map<string, AnyProcess>();
   for (const def of Object.values(defs)) {
     m.set(def.type, def);
   }
@@ -30,14 +35,14 @@ function buildDefsByType(
  * Factory for the app-level `execute` internalMutation. The component's
  * drain loop calls this via a function handle. Execute:
  *
- * 1. Resolves the actor definition + handler from `defs`
+ * 1. Resolves the process definition + handler from `defs`
  * 2. Builds initial state if absent
- * 3. Creates ActorCtx (with peek support via component queries)
+ * 3. Creates InternalProcessCtx (with peek support via component queries)
  * 4. Runs the handler inside an Immer draft
  * 5. Returns the outcome (success/fail/defect) — no DB writes
  */
 export function makeExecute(
-  defs: Record<string, AnyActorDefinition>,
+  defs: Record<string, AnyProcess>,
   component: ActorsComponent,
 ) {
   const defsByType = buildDefsByType(defs);
@@ -50,7 +55,7 @@ export function makeExecute(
       payload: v.any(),
     },
     returns: v.any(),
-    handler: async (ctx, args) => {
+    handler: async (ctx, args): Promise<ExecuteOutcome> => {
       const def = defsByType.get(args.actorType);
       if (!def) {
         return {
@@ -69,7 +74,7 @@ export function makeExecute(
 
       // Payload is already validated by the time it reaches execute:
       // external sends validate in sendRaw, handler-to-handler sends
-      // validate in stub.send/sendSelf. No duplicate validation here.
+      // validate in stub.send/self.send. No duplicate validation here.
 
       const rawState = await ctx.runQuery(
         component.actors.getActorState,
@@ -80,8 +85,8 @@ export function makeExecute(
           ? rawState
           : def.initialState();
 
-      const { ctx: actorCtx, internals } = createActorCtx({
-        selfType: args.actorType,
+      const { ctx: processCtx, internals } = createProcessCtx({
+        selfDefinition: def,
         selfName: args.actorName,
         now: Date.now(),
         peekFn: async (actorType, name) => {
@@ -94,16 +99,11 @@ export function makeExecute(
           if (!targetDef?.project) return null;
           return targetDef.project(state);
         },
-        getDefinition: (t) => {
-          const d = defsByType.get(t);
-          if (!d) throw new Error(`unknown actor type "${t}"`);
-          return d;
-        },
       });
 
       try {
         const draft = createDraft(currentState);
-        internals.returnValue = await handler(draft, args.payload, actorCtx);
+        internals.returnValue = await handler(draft, args.payload, processCtx);
         const nextState = finishDraft(draft);
         const response =
           internals.returnValue === undefined ? null : internals.returnValue;

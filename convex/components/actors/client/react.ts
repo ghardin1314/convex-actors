@@ -22,12 +22,13 @@ import type {
   FunctionReturnType,
 } from "convex/server";
 import type {
-  AnyActorDefinition,
+  AnyProcess,
   MessageNamesOf,
   ProjectionOf,
   ReturnOf,
-} from "./defineActor";
+} from "./defineProcess";
 import type { SagaProjection } from "./defineSaga";
+import type { ScheduleOpts } from "./ctx";
 import type { z } from "zod";
 
 // Re-export saga projection types so app code can name them (prop
@@ -55,7 +56,7 @@ export interface ActorApi {
       name: string;
       msgType: string;
       payload: unknown;
-      opts?: { at?: number; after?: number };
+      opts?: ScheduleOpts;
     },
     string
   >;
@@ -91,17 +92,18 @@ export type ActorResponse<T = unknown> =
  */
 export function createActorHooks(actorApi: ActorApi) {
   /**
-   * Typed actor hook. Returns `send` and `peek` narrowed to the actor
-   * definition's types.
+   * Typed process hook. Returns `send` and `peek` narrowed to the
+   * process definition's types. Accepts both actors and sagas — the
+   * send/peek API is process-agnostic.
    */
-  function useActor<D extends AnyActorDefinition>(
+  function useActor<D extends AnyProcess>(
     def: D,
     name: string,
   ): {
     send: <M extends MessageNamesOf<D>>(
       msgType: M,
       payload: z.infer<D["messages"][M]["payload"]>,
-      opts?: { at?: number; after?: number },
+      opts?: ScheduleOpts,
     ) => Promise<string>;
     peek: ProjectionOf<D> | undefined;
   } {
@@ -115,12 +117,12 @@ export function createActorHooks(actorApi: ActorApi) {
       <M extends MessageNamesOf<D>>(
         msgType: M,
         payload: z.infer<D["messages"][M]["payload"]>,
-        opts?: { at?: number; after?: number },
+        opts?: ScheduleOpts,
       ) => {
         return sendMut({
           actorType: def.type,
           name,
-          msgType: msgType as string,
+          msgType: msgType,
           payload,
           opts,
         });
@@ -130,7 +132,7 @@ export function createActorHooks(actorApi: ActorApi) {
 
     return {
       send,
-      peek: projection as ProjectionOf<D>,
+      peek: projection as ProjectionOf<D> | undefined,
     };
   }
 
@@ -223,7 +225,7 @@ export type TypedResponseEnvelope<T> = {
  */
 export function createResponseAwaiter(getResponseQuery: GetResponseQueryRef) {
   return <
-    D extends AnyActorDefinition,
+    D extends AnyProcess,
     M extends MessageNamesOf<D>,
   >(
     convex: ConvexReactClient,
@@ -272,10 +274,10 @@ export function createResponseAwaiter(getResponseQuery: GetResponseQueryRef) {
  * exact projection type the caller's query returns.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SagaStatusQueryRef = FunctionReference<"query", "public", any, SagaProjection | null>;
+type SagaProjectionQueryRef = FunctionReference<"query", "public", any, SagaProjection | null>;
 
 /**
- * Bind an app-owned saga-status query into an imperative awaiter that
+ * Bind an app-owned saga query into an imperative awaiter that
  * resolves once the saga reaches a terminal phase (`completed` or
  * `failed`). Intended for use inside a tanstack-query `mutationFn` so a
  * single mutation can cover "fire saga start + wait for terminal".
@@ -296,15 +298,15 @@ type SagaStatusQueryRef = FunctionReference<"query", "public", any, SagaProjecti
  *     projection.failedStep  // ← typed: 'holdFunds' | 'placeBid' | null
  *   }
  */
-export function createSagaAwaiter<Q extends SagaStatusQueryRef>(
-  statusQuery: Q,
+export function createSagaAwaiter<Q extends SagaProjectionQueryRef>(
+  projectionQuery: Q,
 ) {
   return (
     convex: ConvexReactClient,
     args: FunctionArgs<Q>,
   ): Promise<NonNullable<FunctionReturnType<Q>>> => {
     return new Promise((resolve, reject) => {
-      const watch = convex.watchQuery(statusQuery, args);
+      const watch = convex.watchQuery(projectionQuery, args);
       let unsubscribe: (() => void) | null = null;
       const check = () => {
         try {

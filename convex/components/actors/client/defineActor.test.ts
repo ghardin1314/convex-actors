@@ -4,14 +4,16 @@ import { describe, expect, expectTypeOf, test } from "vitest";
 import {
   defineActor,
   reply,
-  type PayloadOf,
-  type ProjectionOf,
   type ReplyContextOf,
   type ReplyPayload,
-  type ReturnOf,
-  type StateOf,
   type ValidReplyHandlers,
 } from "./defineActor";
+import type {
+  PayloadOf,
+  ProjectionOf,
+  ReturnOf,
+  StateOf,
+} from "./defineProcess";
 
 describe("defineActor", () => {
   const chatRoom = defineActor({
@@ -46,7 +48,7 @@ describe("defineActor", () => {
     },
   });
 
-  test("is a pure identity function (no registration side effects)", () => {
+  test("returns a plain data object with no registration side effects", () => {
     const spec = {
       type: "counter" as const,
       state: z.object({ n: z.number() }),
@@ -59,7 +61,18 @@ describe("defineActor", () => {
       },
     };
     const def = defineActor(spec);
-    expect(def).toBe(spec);
+    // defineActor wraps user handlers to narrow the ctx, so the
+    // returned object is structurally equal to the spec but not
+    // the same reference.
+    expect(def.type).toBe(spec.type);
+    expect(def.state).toBe(spec.state);
+    expect(def.messages).toBe(spec.messages);
+    expect(def.initialState).toBe(spec.initialState);
+    expect(Object.keys(def.handle).sort()).toEqual(
+      Object.keys(spec.handle).sort(),
+    );
+    // __actor brand present
+    expect(def.__actor).toBeDefined();
   });
 
   test("pins the literal `type` field", () => {

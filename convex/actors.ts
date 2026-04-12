@@ -3,10 +3,13 @@ import { components } from './_generated/api'
 import { account, auction, userBids } from './auctionActors'
 import { auctionHouse } from './auctionHouse'
 import { bidSaga, settlementSaga } from './auctionSagas'
-import { defineActor, reply } from './components/actors/client/defineActor'
-import { defineSaga } from './components/actors/client/defineSaga'
-import { makeExecute } from './components/actors/client/execute'
-import { ActorSystem } from './components/actors/client/system'
+import {
+  ActorSystem,
+  defineActor,
+  defineSaga,
+  makeExecute,
+  reply,
+} from './components/actors/client'
 
 // ── Actor definitions ───────────────────────────────────────────
 
@@ -102,9 +105,7 @@ export const wallet = defineActor({
       state.balance -= amount
       // Ask the target wallet to deposit — the response routes back to
       // transferDepositResult on *this* wallet instance.
-      ctx.ask(
-        wallet,
-        to,
+      ctx.stub(wallet, to).ask(
         'deposit',
         { amount },
         {
@@ -197,9 +198,7 @@ export const jobRunner = defineActor({
   handle: {
     dispatch: async (state, { worker, value }, ctx) => {
       state.pending++
-      ctx.ask(
-        fragile,
-        worker,
+      ctx.stub(fragile, worker).ask(
         'work',
         { value },
         {
@@ -210,9 +209,7 @@ export const jobRunner = defineActor({
     },
     dispatchCrash: async (state, { worker }, ctx) => {
       state.pending++
-      ctx.ask(
-        fragile,
-        worker,
+      ctx.stub(fragile, worker).ask(
         'crash',
         {},
         {
@@ -258,12 +255,11 @@ export const pingPong = defineActor({
   project: (state) => ({ hits: state.hits, log: state.log }),
   handle: {
     serve: async (state, { to, rallies }, ctx) => {
-      const self = ctx.self()
       state.hits = 0
       state.log = [`serving to ${to} (${rallies} rallies)`]
       ctx.stub(pingPong, to).send('reset', {})
       ctx.stub(pingPong, to).send('hit', {
-        from: self.name,
+        from: ctx.self.name,
         ralliesLeft: rallies - 1,
       })
     },
@@ -272,17 +268,16 @@ export const pingPong = defineActor({
       state.log = []
     },
     hit: async (state, { from, ralliesLeft }, ctx) => {
-      const self = ctx.self()
       state.hits++
       const action =
         ralliesLeft > 0
-          ? `${from} -> ${self.name} -> ${from}`
-          : `${from} -> ${self.name} (end)`
+          ? `${from} -> ${ctx.self.name} -> ${from}`
+          : `${from} -> ${ctx.self.name} (end)`
       state.log = [...state.log.slice(-9), `#${state.hits} ${action}`]
 
       if (ralliesLeft > 0) {
         ctx.stub(pingPong, from).send('hit', {
-          from: self.name,
+          from: ctx.self.name,
           ralliesLeft: ralliesLeft - 1,
         })
       }
@@ -312,7 +307,7 @@ export const countdown = defineActor({
       state.remaining = from
       state.running = true
       state.log = [`started at ${from}`]
-      ctx.sendSelf('tick', { intervalMs }, { after: intervalMs })
+      ctx.self.send('tick', { intervalMs }, { after: intervalMs })
     },
     tick: async (state, { intervalMs }, ctx) => {
       if (!state.running) return
@@ -322,7 +317,7 @@ export const countdown = defineActor({
         state.running = false
         state.log = [...state.log.slice(-9), 'done!']
       } else {
-        ctx.sendSelf('tick', { intervalMs }, { after: intervalMs })
+        ctx.self.send('tick', { intervalMs }, { after: intervalMs })
       }
     },
   },
@@ -373,7 +368,7 @@ export const transferSaga = defineSaga({
   steps: {
     withdraw: {
       run: (input, _context, ctx) => {
-        return ctx.ask(wallet, input.from, 'withdraw', {
+        return ctx.stub(wallet, input.from).ask('withdraw', {
           amount: input.amount,
         })
       },
@@ -389,7 +384,7 @@ export const transferSaga = defineSaga({
     },
     deposit: {
       run: (input, _context, ctx) => {
-        return ctx.ask(wallet, input.to, 'deposit', {
+        return ctx.stub(wallet, input.to).ask('deposit', {
           amount: input.amount,
         })
       },
@@ -413,7 +408,7 @@ export const multiTransfer = defineSaga({
   steps: {
     withdraw: {
       run: (input, context, ctx) =>
-        ctx.ask(wallet, input.sources[context.index], 'withdraw', {
+        ctx.stub(wallet, input.sources[context.index]).ask('withdraw', {
           amount: input.amount,
         }),
       onSuccess: (_value, input, context) => {
@@ -431,7 +426,7 @@ export const multiTransfer = defineSaga({
     },
     deposit: {
       run: (input, _context, ctx) =>
-        ctx.ask(wallet, input.target, 'deposit', {
+        ctx.stub(wallet, input.target).ask('deposit', {
           amount: input.amount * input.sources.length,
         }),
       onSuccess: () => ({ next: null }),

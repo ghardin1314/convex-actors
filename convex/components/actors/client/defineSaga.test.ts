@@ -2,9 +2,9 @@ import { z } from "zod";
 import { describe, expect, expectTypeOf, test } from "vitest";
 
 import { defineActor } from "./defineActor";
-import { createActorCtx } from "./ctx";
-import type { AnyActorDefinition } from "./defineActor";
-import type { EffectDescriptor } from "./ctx";
+import { createProcessCtx } from "./ctx";
+import type { AnyProcess } from "./defineProcess";
+import type { Effect } from "../shared.js";
 import { defineSaga, type SagaProjection, type SagaState } from "./defineSaga";
 
 // ── Test actor definitions ──────────────────────────────────────
@@ -52,34 +52,22 @@ const logger = defineActor({
 
 // ── Test helpers ────────────────────────────────────────────────
 
-function sagaState(def: AnyActorDefinition): SagaState {
+function sagaState(def: AnyProcess): SagaState {
   return def.initialState() as SagaState;
 }
 
 function runSagaHandler(
-  sagaDef: AnyActorDefinition,
+  sagaDef: AnyProcess,
   state: SagaState,
   msgType: string,
   payload: unknown,
-  allDefs?: Record<string, AnyActorDefinition>,
 ) {
-  const defs: Record<string, AnyActorDefinition> = {
-    wallet,
-    logger,
-    [sagaDef.type]: sagaDef,
-    ...allDefs,
-  };
   const T0 = 1_700_000_000_000;
-  const { ctx, internals } = createActorCtx({
-    selfType: sagaDef.type,
+  const { ctx, internals } = createProcessCtx({
+    selfDefinition: sagaDef,
     selfName: "saga-1",
     now: T0,
     peekFn: async () => null,
-    getDefinition: (t) => {
-      const d = defs[t];
-      if (!d) throw new Error(`unknown type ${t}`);
-      return d;
-    },
   });
 
   const handler = sagaDef.handle[msgType];
@@ -112,7 +100,7 @@ describe("defineSaga", () => {
           ctx.stub(logger, "main").send("log", {
             msg: `withdrawing ${input.amount} from ${input.from}`,
           });
-          return ctx.ask(wallet, input.from, "withdraw", {
+          return ctx.stub(wallet, input.from).ask("withdraw", {
             amount: input.amount,
           });
         },
@@ -128,7 +116,7 @@ describe("defineSaga", () => {
       },
       deposit: {
         run: (input, _context, ctx) => {
-          return ctx.ask(wallet, input.to, "deposit", {
+          return ctx.stub(wallet, input.to).ask("deposit", {
             amount: input.amount,
           });
         },
@@ -167,24 +155,26 @@ describe("defineSaga", () => {
   test("initialState returns idle saga state", () => {
     const s0 = sagaState(transfer);
     expect(s0).toMatchObject({
-      phase: "idle",
-      currentStep: null,
-      completedSteps: [],
-      failReason: undefined,
+      _saga: {
+        phase: "idle",
+        currentStep: null,
+        completedSteps: [],
+        failReason: undefined,
+      },
     });
   });
 
   test("project returns saga progress info", () => {
-    const state = {
-      phase: "running" as const,
-      currentStep: "withdraw",
-      completedSteps: [
-        { name: "validate", contextSnapshot: {} },
-      ],
+    const state: SagaState = {
+      _saga: {
+        phase: "running",
+        currentStep: "withdraw",
+        completedSteps: [{ name: "validate", contextSnapshot: {} }],
+        failReason: undefined,
+        failedStep: undefined,
+      },
       input: {},
       context: {},
-      failReason: undefined,
-      failedStep: undefined,
     };
     const projection = transfer.project!(state);
     expect(projection).toEqual({
@@ -227,7 +217,7 @@ describe("saga start handler", () => {
     steps: {
       withdraw: {
         run: (input, _context, ctx) => {
-          return ctx.ask(wallet, input.from, "withdraw", {
+          return ctx.stub(wallet, input.from).ask("withdraw", {
             amount: input.amount,
           });
         },
@@ -243,7 +233,7 @@ describe("saga start handler", () => {
       },
       deposit: {
         run: (input, _context, ctx) => {
-          return ctx.ask(wallet, input.to, "deposit", {
+          return ctx.stub(wallet, input.to).ask("deposit", {
             amount: input.amount,
           });
         },
@@ -262,15 +252,15 @@ describe("saga start handler", () => {
     );
     await run();
 
-    expect(state.phase).toBe("running");
-    expect(state.currentStep).toBe("withdraw");
+    expect(state._saga.phase).toBe("running");
+    expect(state._saga.currentStep).toBe("withdraw");
     expect(state.input).toEqual({ from: "alice", to: "bob", amount: 100 });
     // Ask step not yet in completedSteps — only added after onSuccess
-    expect(state.completedSteps).toHaveLength(0);
+    expect(state._saga.completedSteps).toHaveLength(0);
 
     // Should have emitted an ask effect to wallet
     const askEffect = internals.effects.find(
-      (e: EffectDescriptor) => e.replyTo !== undefined,
+      (e: Effect) => e.replyTo !== undefined,
     );
     expect(askEffect).toBeDefined();
     expect(askEffect!.actorType).toBe("wallet");
@@ -291,7 +281,7 @@ describe("saga start handler", () => {
         withdraw: {
           run: (input, _context, ctx) => {
             ctx.stub(logger, "main").send("log", { msg: "starting withdraw" });
-            return ctx.ask(wallet, input.from, "withdraw", {
+            return ctx.stub(wallet, input.from).ask("withdraw", {
               amount: input.amount,
             });
           },
@@ -344,11 +334,11 @@ describe("sync step chaining", () => {
     const { run } = runSagaHandler(saga, state, "start", { value: 5 });
     await run();
 
-    expect(state.phase).toBe("completed");
-    expect(state.currentStep).toBeNull();
+    expect(state._saga.phase).toBe("completed");
+    expect(state._saga.currentStep).toBeNull();
     expect(state.context).toEqual({ doubled: 10, tripled: 15 });
-    expect(state.completedSteps).toHaveLength(2);
-    expect(state.completedSteps.map((s: { name: string }) => s.name)).toEqual([
+    expect(state._saga.completedSteps).toHaveLength(2);
+    expect(state._saga.completedSteps.map((s: { name: string }) => s.name)).toEqual([
       "double",
       "triple",
     ]);
@@ -370,7 +360,7 @@ describe("sync step chaining", () => {
         },
         withdraw: {
           run: (input, _context, ctx) => {
-            return ctx.ask(wallet, input.target, "withdraw", {
+            return ctx.stub(wallet, input.target).ask("withdraw", {
               amount: input.amount,
             });
           },
@@ -388,13 +378,13 @@ describe("sync step chaining", () => {
     );
     await run();
 
-    expect(state.phase).toBe("running");
-    expect(state.currentStep).toBe("withdraw");
+    expect(state._saga.phase).toBe("running");
+    expect(state._saga.currentStep).toBe("withdraw");
     expect(state.context).toEqual({ validated: true });
     // Only the sync validate step is completed; withdraw (ask) awaits reply
-    expect(state.completedSteps).toHaveLength(1);
+    expect(state._saga.completedSteps).toHaveLength(1);
     // Ask effect emitted
-    expect(internals.effects.some((e: EffectDescriptor) => e.replyTo)).toBe(true);
+    expect(internals.effects.some((e: Effect) => e.replyTo)).toBe(true);
   });
 });
 
@@ -408,7 +398,7 @@ describe("reply handling", () => {
     steps: {
       withdraw: {
         run: (input, _context, ctx) => {
-          return ctx.ask(wallet, input.from, "withdraw", {
+          return ctx.stub(wallet, input.from).ask("withdraw", {
             amount: input.amount,
           });
         },
@@ -424,7 +414,7 @@ describe("reply handling", () => {
       },
       deposit: {
         run: (input, _context, ctx) => {
-          return ctx.ask(wallet, input.to, "deposit", {
+          return ctx.stub(wallet, input.to).ask("deposit", {
             amount: input.amount,
           });
         },
@@ -436,11 +426,11 @@ describe("reply handling", () => {
   function makeReplyState() {
     const state = sagaState(transfer);
     // Simulate state after start emitted the withdraw ask (not yet completed)
-    state.phase = "running";
-    state.currentStep = "withdraw";
+    state._saga.phase = "running";
+    state._saga.currentStep = "withdraw";
     state.input = { from: "alice", to: "bob", amount: 100 };
     state.context = { withdrawn: undefined };
-    state.completedSteps = [];
+    state._saga.completedSteps = [];
     return state;
   }
 
@@ -460,10 +450,10 @@ describe("reply handling", () => {
 
     // Should have advanced context and moved to deposit
     expect(state.context).toEqual({ withdrawn: true });
-    expect(state.currentStep).toBe("deposit");
+    expect(state._saga.currentStep).toBe("deposit");
     // Deposit step emits its own ask
     const askEffect = internals.effects.find(
-      (e: EffectDescriptor) => e.replyTo !== undefined,
+      (e: Effect) => e.replyTo !== undefined,
     );
     expect(askEffect).toBeDefined();
     expect(askEffect!.actorType).toBe("wallet");
@@ -475,9 +465,9 @@ describe("reply handling", () => {
   test("successful final reply completes saga", async () => {
     const state = makeReplyState();
     // Simulate: withdraw reply succeeded, now awaiting deposit reply
-    state.currentStep = "deposit";
+    state._saga.currentStep = "deposit";
     state.context = { withdrawn: true };
-    state.completedSteps = [
+    state._saga.completedSteps = [
       { name: "withdraw", contextSnapshot: { withdrawn: undefined } },
     ];
 
@@ -493,8 +483,8 @@ describe("reply handling", () => {
     );
     await run();
 
-    expect(state.phase).toBe("completed");
-    expect(state.currentStep).toBeNull();
+    expect(state._saga.phase).toBe("completed");
+    expect(state._saga.currentStep).toBeNull();
   });
 
   test("failed reply on first ask step fails with no compensation", async () => {
@@ -511,8 +501,8 @@ describe("reply handling", () => {
     );
     await run();
 
-    expect(state.phase).toBe("failed");
-    expect(state.failReason).toBe("insufficient_funds");
+    expect(state._saga.phase).toBe("failed");
+    expect(state._saga.failReason).toBe("insufficient_funds");
     // No compensation — the withdraw ask failed, nothing to undo
     expect(internals.effects).toHaveLength(0);
   });
@@ -520,9 +510,9 @@ describe("reply handling", () => {
   test("failed reply after prior steps triggers compensation", async () => {
     // Simulate: withdraw succeeded, deposit ask pending
     const state = makeReplyState();
-    state.currentStep = "deposit";
+    state._saga.currentStep = "deposit";
     state.context = { withdrawn: true };
-    state.completedSteps = [
+    state._saga.completedSteps = [
       { name: "withdraw", contextSnapshot: { withdrawn: undefined } },
     ];
 
@@ -538,12 +528,12 @@ describe("reply handling", () => {
     );
     await run();
 
-    expect(state.phase).toBe("failed");
-    expect(state.failReason).toBe("target_locked");
+    expect(state._saga.phase).toBe("failed");
+    expect(state._saga.failReason).toBe("target_locked");
 
     // Compensation should undo the withdraw (re-deposit to alice)
     const compensationEffect = internals.effects.find(
-      (e: EffectDescriptor) =>
+      (e: Effect) =>
         e.actorType === "wallet" && e.msgType === "deposit",
     );
     expect(compensationEffect).toBeDefined();
@@ -565,8 +555,8 @@ describe("reply handling", () => {
     );
     await run();
 
-    expect(state.phase).toBe("failed");
-    expect(state.failReason).toBe("handler crashed");
+    expect(state._saga.phase).toBe("failed");
+    expect(state._saga.failReason).toBe("handler crashed");
   });
 });
 
@@ -601,7 +591,7 @@ describe("compensation ordering and context snapshots", () => {
         },
         step3: {
           run: (input, _context, ctx) => {
-            return ctx.ask(wallet, input.target, "withdraw", { amount: 100 });
+            return ctx.stub(wallet, input.target).ask("withdraw", { amount: 100 });
           },
           onSuccess: () => ({ next: null }),
           compensate: (_input, context) => {
@@ -622,7 +612,7 @@ describe("compensation ordering and context snapshots", () => {
     await runStart();
 
     // Sync steps completed, ask step (step3) awaits reply
-    expect(state.completedSteps).toHaveLength(2);
+    expect(state._saga.completedSteps).toHaveLength(2);
 
     // Now simulate a failed reply on step3
     const { run: runReply } = runSagaHandler(
@@ -637,7 +627,7 @@ describe("compensation ordering and context snapshots", () => {
     );
     await runReply();
 
-    expect(state.phase).toBe("failed");
+    expect(state._saga.phase).toBe("failed");
 
     // step3's ask failed so it's NOT in completedSteps — only step1 and step2
     // compensate. Compensation runs in reverse: step2, step1
@@ -694,8 +684,8 @@ describe("ctx.fail in saga steps", () => {
     const { run } = runSagaHandler(saga, state, "start", {});
     await run();
 
-    expect(state.phase).toBe("failed");
-    expect(state.failReason).toBe("validation_error");
+    expect(state._saga.phase).toBe("failed");
+    expect(state._saga.failReason).toBe("validation_error");
     expect(compensated).toEqual(["setup"]);
   });
 
@@ -720,9 +710,9 @@ describe("ctx.fail in saga steps", () => {
     const { run } = runSagaHandler(saga, state, "start", {});
     await run();
 
-    expect(state.phase).toBe("failed");
-    expect(state.failReason).toBe("instant_fail");
-    expect(state.completedSteps).toHaveLength(0);
+    expect(state._saga.phase).toBe("failed");
+    expect(state._saga.failReason).toBe("instant_fail");
+    expect(state._saga.completedSteps).toHaveLength(0);
   });
 });
 
@@ -738,7 +728,7 @@ describe("saga ask validation", () => {
         go: {
           run: (_input, _context, ctx) => {
             // @ts-expect-error — intentionally bad payload
-            return ctx.ask(wallet, "alice", "withdraw", { amount: "not a number" });
+            return ctx.stub(wallet, "alice").ask("withdraw", { amount: "not a number" });
           },
           onSuccess: () => ({ next: null }),
         },
@@ -761,7 +751,7 @@ describe("saga ask validation", () => {
         go: {
           run: (_input, _context, ctx) => {
             // @ts-expect-error — intentionally bad msgType
-            return ctx.ask(wallet, "alice", "bogus", {});
+            return ctx.stub(wallet, "alice").ask("bogus", {});
           },
           onSuccess: () => ({ next: null }),
         },
@@ -784,7 +774,7 @@ describe("saga ask validation", () => {
         // @ts-expect-error — ask step requires onSuccess
         go: {
           run: (_input: Record<string, never>, _context: Record<string, never>, ctx) =>
-            ctx.ask(wallet, "alice", "withdraw", { amount: 1 }),
+            ctx.stub(wallet, "alice").ask("withdraw", { amount: 1 }),
         },
       },
     });
@@ -822,7 +812,7 @@ describe("edge cases", () => {
     steps: {
       go: {
         run: (input, _context, ctx) =>
-          ctx.ask(wallet, input.target, "withdraw", { amount: 10 }),
+          ctx.stub(wallet, input.target).ask("withdraw", { amount: 10 }),
         onSuccess: () => ({ next: null }),
       },
     },
@@ -835,7 +825,7 @@ describe("edge cases", () => {
       simpleSaga, state, "start", { target: "alice" },
     );
     await run1();
-    expect(state.phase).toBe("running");
+    expect(state._saga.phase).toBe("running");
 
     // Second start should fail
     const { run: run2 } = runSagaHandler(
@@ -843,38 +833,38 @@ describe("edge cases", () => {
     );
     await expect(run2()).rejects.toThrow(/FailSentinel/);
     // State unchanged — still running the original saga
-    expect(state.phase).toBe("running");
+    expect(state._saga.phase).toBe("running");
     expect(state.input).toEqual({ target: "alice" });
   });
 
   test("calling start on a completed saga fails", async () => {
     const state = sagaState(simpleSaga);
-    state.phase = "completed";
+    state._saga.phase = "completed";
 
     const { run } = runSagaHandler(
       simpleSaga, state, "start", { target: "alice" },
     );
     await expect(run()).rejects.toThrow(/FailSentinel/);
-    expect(state.phase).toBe("completed");
+    expect(state._saga.phase).toBe("completed");
   });
 
   test("calling start on a failed saga fails", async () => {
     const state = sagaState(simpleSaga);
-    state.phase = "failed";
+    state._saga.phase = "failed";
 
     const { run } = runSagaHandler(
       simpleSaga, state, "start", { target: "alice" },
     );
     await expect(run()).rejects.toThrow(/FailSentinel/);
-    expect(state.phase).toBe("failed");
+    expect(state._saga.phase).toBe("failed");
   });
 
   test("stale reply on completed saga is ignored", async () => {
     const state = sagaState(simpleSaga);
-    state.phase = "completed";
-    state.currentStep = null;
+    state._saga.phase = "completed";
+    state._saga.currentStep = null;
     state.input = { target: "alice" };
-    state.completedSteps = [{ name: "go", contextSnapshot: {} }];
+    state._saga.completedSteps = [{ name: "go", contextSnapshot: {} }];
 
     const { run } = runSagaHandler(
       simpleSaga,
@@ -889,17 +879,17 @@ describe("edge cases", () => {
     await run();
 
     // State unchanged
-    expect(state.phase).toBe("completed");
-    expect(state.completedSteps).toHaveLength(1);
+    expect(state._saga.phase).toBe("completed");
+    expect(state._saga.completedSteps).toHaveLength(1);
   });
 
   test("stale reply on failed saga is ignored", async () => {
     const state = sagaState(simpleSaga);
-    state.phase = "failed";
-    state.currentStep = "go";
+    state._saga.phase = "failed";
+    state._saga.currentStep = "go";
     state.input = { target: "alice" };
-    state.completedSteps = [];
-    state.failReason = "earlier_failure";
+    state._saga.completedSteps = [];
+    state._saga.failReason = "earlier_failure";
 
     const { run } = runSagaHandler(
       simpleSaga,
@@ -914,8 +904,8 @@ describe("edge cases", () => {
     await run();
 
     // State unchanged — original fail reason preserved
-    expect(state.phase).toBe("failed");
-    expect(state.failReason).toBe("earlier_failure");
+    expect(state._saga.phase).toBe("failed");
+    expect(state._saga.failReason).toBe("earlier_failure");
   });
 
   test("compensation continues when a compensate handler throws", async () => {
@@ -948,7 +938,7 @@ describe("edge cases", () => {
         },
         step3: {
           run: (_input, _context, ctx) =>
-            ctx.ask(wallet, "alice", "withdraw", { amount: 10 }),
+            ctx.stub(wallet, "alice").ask("withdraw", { amount: 10 }),
           onSuccess: () => ({ next: null }),
         },
       },
@@ -971,7 +961,7 @@ describe("edge cases", () => {
     );
     await runReply();
 
-    expect(state.phase).toBe("failed");
+    expect(state._saga.phase).toBe("failed");
     // step3's ask failed so it's not compensated. step2's compensate
     // threw, but step1's still ran.
     expect(compensated).toEqual(["step1"]);
@@ -992,7 +982,7 @@ describe("looping steps", () => {
     steps: {
       withdraw: {
         run: (input, context, ctx) =>
-          ctx.ask(wallet, input.sources[context.index], "withdraw", {
+          ctx.stub(wallet, input.sources[context.index]).ask("withdraw", {
             amount: input.amount,
           }),
         onSuccess: (_value, input, context) => {
@@ -1010,7 +1000,7 @@ describe("looping steps", () => {
       },
       deposit: {
         run: (input, _context, ctx) =>
-          ctx.ask(wallet, input.target, "deposit", {
+          ctx.stub(wallet, input.target).ask("deposit", {
             amount: input.amount * input.sources.length,
           }),
         onSuccess: () => ({ next: null }),
@@ -1043,9 +1033,9 @@ describe("looping steps", () => {
       multiWithdraw, state, "start", input,
     );
     await runStart();
-    expect(state.phase).toBe("running");
+    expect(state._saga.phase).toBe("running");
     expect(state.context).toEqual({ index: 0 });
-    expect(startEffects.effects.find((e: EffectDescriptor) => e.replyTo)!.name).toBe("alice");
+    expect(startEffects.effects.find((e: Effect) => e.replyTo)!.name).toBe("alice");
 
     // Reply from alice: advances to bob
     const { run: run1, internals: effects1 } = runSagaHandler(
@@ -1053,8 +1043,8 @@ describe("looping steps", () => {
     );
     await run1();
     expect(state.context).toEqual({ index: 1 });
-    expect(state.completedSteps).toHaveLength(1);
-    expect(effects1.effects.find((e: EffectDescriptor) => e.replyTo)!.name).toBe("bob");
+    expect(state._saga.completedSteps).toHaveLength(1);
+    expect(effects1.effects.find((e: Effect) => e.replyTo)!.name).toBe("bob");
 
     // Reply from bob: advances to charlie
     const { run: run2, internals: effects2 } = runSagaHandler(
@@ -1062,17 +1052,17 @@ describe("looping steps", () => {
     );
     await run2();
     expect(state.context).toEqual({ index: 2 });
-    expect(state.completedSteps).toHaveLength(2);
-    expect(effects2.effects.find((e: EffectDescriptor) => e.replyTo)!.name).toBe("charlie");
+    expect(state._saga.completedSteps).toHaveLength(2);
+    expect(effects2.effects.find((e: Effect) => e.replyTo)!.name).toBe("charlie");
 
     // Reply from charlie: transitions to deposit
     const { run: run3, internals: effects3 } = runSagaHandler(
       multiWithdraw, state, "withdraw_reply", successReply("charlie"),
     );
     await run3();
-    expect(state.completedSteps).toHaveLength(3);
-    expect(state.currentStep).toBe("deposit");
-    const depositEffect = effects3.effects.find((e: EffectDescriptor) => e.replyTo);
+    expect(state._saga.completedSteps).toHaveLength(3);
+    expect(state._saga.currentStep).toBe("deposit");
+    const depositEffect = effects3.effects.find((e: Effect) => e.replyTo);
     expect(depositEffect!.name).toBe("vault");
     expect(depositEffect!.payload).toEqual({ amount: 30 });
 
@@ -1081,8 +1071,8 @@ describe("looping steps", () => {
       multiWithdraw, state, "deposit_reply", successReply("vault"),
     );
     await run4();
-    expect(state.phase).toBe("completed");
-    expect(state.completedSteps).toHaveLength(4);
+    expect(state._saga.phase).toBe("completed");
+    expect(state._saga.completedSteps).toHaveLength(4);
   });
 
   test("failure mid-loop compensates all prior iterations", async () => {
@@ -1106,7 +1096,7 @@ describe("looping steps", () => {
       multiWithdraw, state, "withdraw_reply", successReply("bob"),
     );
     await run2();
-    expect(state.completedSteps).toHaveLength(2);
+    expect(state._saga.completedSteps).toHaveLength(2);
 
     // Charlie fails
     const { run: run3, internals } = runSagaHandler(
@@ -1114,12 +1104,12 @@ describe("looping steps", () => {
     );
     await run3();
 
-    expect(state.phase).toBe("failed");
-    expect(state.failReason).toBe("insufficient_funds");
+    expect(state._saga.phase).toBe("failed");
+    expect(state._saga.failReason).toBe("insufficient_funds");
 
     // Compensation: bob then alice (reverse order), each gets a deposit
     const compensationEffects = internals.effects.filter(
-      (e: EffectDescriptor) => e.actorType === "wallet" && e.msgType === "deposit",
+      (e: Effect) => e.actorType === "wallet" && e.msgType === "deposit",
     );
     expect(compensationEffects).toHaveLength(2);
     // Reverse order: bob (index 1) then alice (index 0)
@@ -1144,8 +1134,8 @@ describe("looping steps", () => {
     );
     await run();
 
-    expect(state.phase).toBe("failed");
-    expect(state.completedSteps).toHaveLength(0);
+    expect(state._saga.phase).toBe("failed");
+    expect(state._saga.completedSteps).toHaveLength(0);
     // No compensation effects
     expect(internals.effects).toHaveLength(0);
   });
@@ -1167,10 +1157,10 @@ describe("looping steps", () => {
     }
 
     // Each completed step has the correct index snapshot
-    expect(state.completedSteps).toHaveLength(3);
-    expect(state.completedSteps[0].contextSnapshot).toEqual({ index: 0 });
-    expect(state.completedSteps[1].contextSnapshot).toEqual({ index: 1 });
-    expect(state.completedSteps[2].contextSnapshot).toEqual({ index: 2 });
+    expect(state._saga.completedSteps).toHaveLength(3);
+    expect(state._saga.completedSteps[0].contextSnapshot).toEqual({ index: 0 });
+    expect(state._saga.completedSteps[1].contextSnapshot).toEqual({ index: 1 });
+    expect(state._saga.completedSteps[2].contextSnapshot).toEqual({ index: 2 });
   });
 });
 
@@ -1185,7 +1175,7 @@ describe("dynamic next steps", () => {
       steps: {
         check: {
           run: (input, _context, ctx) =>
-            ctx.ask(wallet, input.target, "withdraw", { amount: 1 }),
+            ctx.stub(wallet, input.target).ask("withdraw", { amount: 1 }),
           onSuccess: (value, _input, context) => {
             const bal = (value as { newBalance: number }).newBalance;
             if (bal > 100) {
@@ -1219,8 +1209,8 @@ describe("dynamic next steps", () => {
       },
     );
     await runReply1();
-    expect(state1.phase).toBe("completed");
-    expect(state1.completedSteps.map((s) => s.name)).toEqual([
+    expect(state1._saga.phase).toBe("completed");
+    expect(state1._saga.completedSteps.map((s) => s.name)).toEqual([
       "check",
       "highBalance",
     ]);
@@ -1241,8 +1231,8 @@ describe("dynamic next steps", () => {
       },
     );
     await runReply2();
-    expect(state2.phase).toBe("completed");
-    expect(state2.completedSteps.map((s) => s.name)).toEqual([
+    expect(state2._saga.phase).toBe("completed");
+    expect(state2._saga.completedSteps.map((s) => s.name)).toEqual([
       "check",
       "lowBalance",
     ]);
@@ -1282,15 +1272,15 @@ describe("dynamic next steps", () => {
     const state1 = sagaState(saga);
     const { run: run1 } = runSagaHandler(saga, state1, "start", { value: 42 });
     await run1();
-    expect(state1.phase).toBe("completed");
+    expect(state1._saga.phase).toBe("completed");
     expect(state1.context).toEqual({ path: "positive->done" });
-    expect(state1.completedSteps.map((s) => s.name)).toEqual(["decide", "positive"]);
+    expect(state1._saga.completedSteps.map((s) => s.name)).toEqual(["decide", "positive"]);
 
     const state2 = sagaState(saga);
     const { run: run2 } = runSagaHandler(saga, state2, "start", { value: -1 });
     await run2();
-    expect(state2.phase).toBe("completed");
+    expect(state2._saga.phase).toBe("completed");
     expect(state2.context).toEqual({ path: "negative->done" });
-    expect(state2.completedSteps.map((s) => s.name)).toEqual(["decide", "negative"]);
+    expect(state2._saga.completedSteps.map((s) => s.name)).toEqual(["decide", "negative"]);
   });
 });

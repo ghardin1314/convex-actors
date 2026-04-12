@@ -16,7 +16,7 @@
  * file stays focused on entity state machines.
  */
 import { z } from 'zod'
-import { defineSaga } from './components/actors/client/defineSaga'
+import { defineSaga } from './components/actors/client'
 // Cyclic import with auctionActors (both sagas send back to auction and
 // account). ESM handles the cycle — values are only read inside step
 // callbacks, not at module evaluation time.
@@ -51,12 +51,12 @@ export const bidSaga = defineSaga({
         // `auctions.listUserBids` can find it. `append` is idempotent
         // on `idempotencyKey`, so saga retries are safe.
         ctx.stub(userBids, input.bidder).send('append', {
-          idempotencyKey: ctx.self().name,
+          idempotencyKey: ctx.self.name,
           auctionName: input.auctionName,
           amount: input.amount,
         })
-        return ctx.ask(account, input.bidder, 'hold', {
-          holdId: holdIdForSaga(ctx.self().name),
+        return ctx.stub(account, input.bidder).ask('hold', {
+          holdId: holdIdForSaga(ctx.self.name),
           amount: input.amount,
         })
       },
@@ -69,16 +69,16 @@ export const bidSaga = defineSaga({
       // fails with no compensation needed.
       compensate: (input, _context, ctx) => {
         ctx.stub(account, input.bidder).send('releaseHold', {
-          holdId: holdIdForSaga(ctx.self().name),
+          holdId: holdIdForSaga(ctx.self.name),
         })
       },
     },
     placeBid: {
       run: (input, _context, ctx) =>
-        ctx.ask(auction, input.auctionName, 'bid', {
+        ctx.stub(auction, input.auctionName).ask('bid', {
           bidder: input.bidder,
           amount: input.amount,
-          holdId: holdIdForSaga(ctx.self().name),
+          holdId: holdIdForSaga(ctx.self.name),
         }),
       onSuccess: () => ({ next: null }),
       // No compensate on the final step — nothing to undo at this level.
@@ -132,7 +132,7 @@ export const settlementSaga = defineSaga({
     },
     settleWinnerHold: {
       run: (input, _context, ctx) =>
-        ctx.ask(account, input.winner, 'settleHold', {
+        ctx.stub(account, input.winner).ask('settleHold', {
           holdId: input.holdId,
         }),
       onSuccess: (_value, _input, context) => ({
@@ -148,7 +148,7 @@ export const settlementSaga = defineSaga({
     },
     payoutSeller: {
       run: (input, _context, ctx) =>
-        ctx.ask(account, input.seller, 'deposit', {
+        ctx.stub(account, input.seller).ask('deposit', {
           amount: input.amount,
         }),
       onSuccess: (_value, _input, context) => ({

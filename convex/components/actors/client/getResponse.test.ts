@@ -62,7 +62,7 @@ describe("system.getResponse", () => {
   });
 
   test("rejects an invalid messageId", async () => {
-    const { t, system, ref } = setup({ counter });
+    const { t, system } = setup({ counter });
     await t.run(async (ctx) => {
       await expect(
         system.getResponse(ctx, { messageId: "nonexistent" }),

@@ -78,6 +78,56 @@ export const vReplyTo = v.object({
   context: v.any(),
 });
 
+// -------- Effects --------
+
+/**
+ * Reply-routing metadata. TS counterpart to `vReplyTo`, hand-written
+ * so `context` stays `unknown` instead of the `any` that `v.any()`
+ * would infer to.
+ */
+export type ReplyTo = {
+  actorType: string;
+  name: string;
+  handler: string;
+  context: unknown;
+};
+
+/**
+ * One message effect produced by a handler. Shared shape for both the
+ * `enqueueMessageHandler` input and the `execute` mutation's
+ * `outcome.effects` field so producer and consumer agree on a single
+ * type. The validator counterpart lives in `enqueue.ts` as `vEffect`;
+ * defined in TS here (rather than via `Infer<typeof vEffect>`) so
+ * `payload` can stay `unknown`.
+ */
+export type Effect = {
+  actorType: string;
+  name: string;
+  msgType: string;
+  payload: unknown;
+  deliverAt: number;
+  replyTo?: ReplyTo;
+};
+
+/**
+ * Return shape of the app-level `execute` mutation. The producer
+ * (`makeExecute` in `client/execute.ts`) should annotate its handler
+ * return type with this, and the consumer (the drain loop in
+ * `drain.ts`) picks it up via `ExecuteFnHandle`'s third generic — so
+ * both sides of the function-handle boundary agree on a single type.
+ * The drain loop discriminates on `outcome` and commits state,
+ * effects, and the response row accordingly.
+ */
+export type ExecuteOutcome =
+  | {
+      outcome: "success";
+      newState: unknown;
+      effects: Effect[];
+      response: unknown;
+    }
+  | { outcome: "fail"; reason: string; details?: unknown }
+  | { outcome: "defect"; error: string };
+
 // -------- Validators --------
 
 /**

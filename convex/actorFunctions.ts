@@ -16,10 +16,10 @@ export const send = mutation({
     msgType: v.string(),
     payload: v.any(),
     opts: v.optional(
-      v.object({
-        at: v.optional(v.number()),
-        after: v.optional(v.number()),
-      }),
+      v.union(
+        v.object({ at: v.number() }),
+        v.object({ after: v.number() }),
+      ),
     ),
   },
   returns: v.string(),

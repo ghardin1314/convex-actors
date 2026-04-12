@@ -3,7 +3,7 @@ import type { Id } from './_generated/dataModel.js'
 import { mutation, type MutationCtx } from './_generated/server.js'
 import { getOrCreateActorRow } from './actors.js'
 import { kickMailbox, type ExecuteFnHandle } from './kick.js'
-import { now, vReplyTo } from './shared.js'
+import { now, vReplyTo, type Effect } from './shared.js'
 
 /**
  * Single effect to apply: a message targeted at one `(actorType, name)`
@@ -64,19 +64,7 @@ export const enqueueMessage = mutation({
 
 export async function enqueueMessageHandler(
   ctx: MutationCtx,
-  effects: Array<{
-    actorType: string
-    name: string
-    msgType: string
-    payload: unknown
-    deliverAt: number
-    replyTo?: {
-      actorType: string
-      name: string
-      handler: string
-      context: unknown
-    }
-  }>,
+  effects: Effect[],
   executeFn: ExecuteFnHandle,
 ): Promise<Array<Id<'messages'>>> {
   const sentAt = now()
@@ -91,8 +79,7 @@ export async function enqueueMessageHandler(
   // per distinct target with the tightest deadline this batch
   // contributes. Batches targeting two actors → two kicks; a batch
   // re-targeting the same actor at multiple deliverAts → one kick at
-  // the min. Avoids the redundant second kick a naive per-effect loop
-  // would produce.
+  // the min.
   const earliestByActor = new Map<Id<'actor'>, number>()
 
   // `sendSeq = i` is the input index and acts as
@@ -137,10 +124,7 @@ export async function enqueueMessageHandler(
   }
 
   // Kicks are issued after all inserts so that the kick's state-machine
-  // read of `mailboxState` sees a fully-populated mailbox. Sequential
-  // is intentional — parallelizing wouldn't help (single-threaded
-  // writes) and would only obscure the order of `_scheduled_functions`
-  // rows that tests inspect.
+  // read of `mailboxState` sees a fully-populated mailbox. Potential to parallelize in the future..
   for (const [actorId, deliverAt] of earliestByActor) {
     await kickMailbox(ctx, { actorId, deliverAt, executeFn })
   }

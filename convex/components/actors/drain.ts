@@ -210,8 +210,7 @@ export const drainLoop = internalMutation({
 
     // ── Execute handler ─────────────────────────────────────
     const result = await ctx.runMutation(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      args.executeFn as any,
+      args.executeFn as ExecuteFnHandle,
       {
         actorType: actor.actorType,
         actorName: actor.name,

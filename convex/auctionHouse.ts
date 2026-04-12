@@ -14,7 +14,7 @@
  * don't pay for an idle rescheduler.
  */
 import { z } from 'zod'
-import { defineActor } from './components/actors/client/defineActor'
+import { defineActor } from './components/actors/client'
 // Import is cyclic (auction → auctionHouse for reportState). ESM handles
 // the cycle fine because the binding is only read inside handlers, not
 // at module evaluation time.
@@ -207,7 +207,7 @@ export const auctionHouse = defineActor({
       // below), so we can safely re-arm it next time.
       if (phase === SETTLING_PHASE && !state.healthCheckScheduled) {
         state.healthCheckScheduled = true
-        ctx.sendSelf(
+        ctx.self.send(
           'checkHealth',
           {},
           { after: state.healthCheckIntervalMs },
@@ -243,7 +243,7 @@ export const auctionHouse = defineActor({
         return
       }
 
-      ctx.sendSelf('checkHealth', {}, { after: state.healthCheckIntervalMs })
+      ctx.self.send('checkHealth', {}, { after: state.healthCheckIntervalMs })
     },
   },
 })

@@ -19,8 +19,8 @@
  * See DEMO.md for the full design.
  */
 import { z } from 'zod'
-import { defineActor } from './components/actors/client/defineActor'
-import type { ActorHandlerCtx } from './components/actors/client/defineActor'
+import { defineActor } from './components/actors/client'
+import type { ActorHandlerCtx } from './components/actors/client'
 import { auctionHouse } from './auctionHouse'
 import { settlementSaga } from './auctionSagas'
 
@@ -303,7 +303,7 @@ export const auction = defineActor({
       state.phase = 'active'
       state.tickEpoch = 0
       state.phaseStartedAt = ctx.now()
-      ctx.sendSelf('tick', { epoch: 0 }, { after: state.config.durationMs })
+      ctx.self.send('tick', { epoch: 0 }, { after: state.config.durationMs })
       reportAuctionState(ctx, state)
     },
 
@@ -343,7 +343,7 @@ export const auction = defineActor({
         state.phase = 'going_once'
         state.tickEpoch += 1
         state.phaseStartedAt = ctx.now()
-        ctx.sendSelf(
+        ctx.self.send(
           'tick',
           { epoch: state.tickEpoch },
           { after: state.config.goingOnceMs },
@@ -361,7 +361,7 @@ export const auction = defineActor({
           state.phase = 'going_once'
           state.tickEpoch += 1
           state.phaseStartedAt = ctx.now()
-          ctx.sendSelf(
+          ctx.self.send(
             'tick',
             { epoch: state.tickEpoch },
             { after: state.config.goingOnceMs },
@@ -373,7 +373,7 @@ export const auction = defineActor({
           state.phase = 'going_twice'
           state.tickEpoch += 1
           state.phaseStartedAt = ctx.now()
-          ctx.sendSelf(
+          ctx.self.send(
             'tick',
             { epoch: state.tickEpoch },
             { after: state.config.goingTwiceMs },
@@ -389,10 +389,9 @@ export const auction = defineActor({
             // rollback) via `settlementComplete` / `settlementFailed`.
             state.phase = 'settling'
             state.tickEpoch += 1
-            const self = ctx.self()
-            const sagaName = `${self.name}-settlement`
+            const sagaName = `${ctx.self.name}-settlement`
             ctx.stub(settlementSaga, sagaName).send('start', {
-              auctionName: self.name,
+              auctionName: ctx.self.name,
               winner: state.currentBid.bidder,
               seller: state.seller,
               amount: state.currentBid.amount,
@@ -462,9 +461,8 @@ function reportAuctionState(
   ctx: ActorHandlerCtx<typeof auction>,
   state: z.infer<typeof auction.state>,
 ): void {
-  const self = ctx.self()
   ctx.stub(auctionHouse, 'main').send('reportState', {
-    auctionName: self.name,
+    auctionName: ctx.self.name,
     phase: state.phase,
     currentBid: state.currentBid
       ? { bidder: state.currentBid.bidder, amount: state.currentBid.amount }

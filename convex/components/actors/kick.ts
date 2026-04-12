@@ -3,13 +3,20 @@ import type { Id } from './_generated/dataModel.js'
 import { internal } from './_generated/api.js'
 import type { MutationCtx } from './_generated/server.js'
 import { getMailboxRow } from './actors.js'
-import { KICK_EPSILON_MS, boundScheduledTime } from './shared.js'
+import {
+  KICK_EPSILON_MS,
+  boundScheduledTime,
+  type ExecuteOutcome,
+} from './shared.js'
 
 /**
  * Shape of the app-level `execute` internalMutation that the drain
  * loop calls to invoke actor handlers. The component receives this
  * handle from the app via `send` and propagates it through the
- * drain loop and effect kicks.
+ * drain loop and effect kicks. `ExecuteOutcome` (in `shared.ts`) is
+ * the authoritative return shape — the producer `makeExecute` in
+ * `client/execute.ts` annotates its handler with it, and the drain
+ * loop reads it through this handle's third generic.
  */
 export type ExecuteFnHandle = FunctionHandle<
   'mutation',
@@ -18,7 +25,8 @@ export type ExecuteFnHandle = FunctionHandle<
     actorName: string
     msgType: string
     payload: unknown
-  }
+  },
+  ExecuteOutcome
 >
 
 /**

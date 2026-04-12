@@ -108,17 +108,6 @@ describe("system.send", () => {
     });
   });
 
-  test("opts.at wins over opts.after when both set", async () => {
-    const { t, system, ref } = setup({ counter });
-    await t.run(async (ctx) => {
-      const id = await system.send(
-        ctx, ref, counter, "a", "inc", { by: 1 },
-        { at: T0 + 1000, after: 500 },
-      );
-      expect(id).toBeTruthy();
-    });
-  });
-
   test("past opts.at is clamped to now", async () => {
     const { t, system, ref } = setup({ counter });
     await t.run(async (ctx) => {

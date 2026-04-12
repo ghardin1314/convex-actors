@@ -11,8 +11,10 @@
 import type * as actors from "../actors.js";
 import type * as client_ctx from "../client/ctx.js";
 import type * as client_defineActor from "../client/defineActor.js";
+import type * as client_defineProcess from "../client/defineProcess.js";
 import type * as client_defineSaga from "../client/defineSaga.js";
 import type * as client_execute from "../client/execute.js";
+import type * as client_index from "../client/index.js";
 import type * as client_react from "../client/react.js";
 import type * as client_system from "../client/system.js";
 import type * as crons from "../crons.js";
@@ -35,8 +37,10 @@ const fullApi: ApiFromModules<{
   actors: typeof actors;
   "client/ctx": typeof client_ctx;
   "client/defineActor": typeof client_defineActor;
+  "client/defineProcess": typeof client_defineProcess;
   "client/defineSaga": typeof client_defineSaga;
   "client/execute": typeof client_execute;
+  "client/index": typeof client_index;
   "client/react": typeof client_react;
   "client/system": typeof client_system;
   crons: typeof crons;

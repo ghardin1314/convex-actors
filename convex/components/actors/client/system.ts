@@ -1,151 +1,144 @@
+/**
+ * `ActorSystem` — typed registry + dispatch facade for a set of
+ * actor definitions (sagas count as actors here — they share the
+ * same registration and dispatch path). Follows the workpool
+ * pattern: methods take `ctx` (RunMutationCtx / RunQueryCtx) and
+ * call component mutations/queries directly.
+ */
 import {
   createFunctionHandle,
   type FunctionReference,
   type FunctionReturnType,
   type OptionalRestArgs,
-} from "convex/server";
-import type { ComponentApi } from "../_generated/component";
-import type {
-  AnyActorDefinition,
-  MessageNamesOf,
-  ProjectionOf,
-} from "./defineActor";
-import type { z } from "zod";
+} from 'convex/server'
+import type { z } from 'zod'
+import type { ComponentApi } from '../_generated/component'
+import type { AnyProcess, MessageNamesOf, ProjectionOf } from './defineProcess'
+import type { ScheduleOpts } from './ctx'
 
 export type RunQueryCtx = {
-  runQuery: <Query extends FunctionReference<"query", "public" | "internal">>(
+  runQuery: <Query extends FunctionReference<'query', 'public' | 'internal'>>(
     query: Query,
     ...args: OptionalRestArgs<Query>
-  ) => Promise<FunctionReturnType<Query>>;
-};
+  ) => Promise<FunctionReturnType<Query>>
+}
 
 export type RunMutationCtx = {
   runMutation: <
-    Mutation extends FunctionReference<"mutation", "public" | "internal">,
+    Mutation extends FunctionReference<'mutation', 'public' | 'internal'>,
   >(
     mutation: Mutation,
     ...args: OptionalRestArgs<Mutation>
-  ) => Promise<FunctionReturnType<Mutation>>;
-};
+  ) => Promise<FunctionReturnType<Mutation>>
+}
 
 /**
- * Type alias for the `components.actors` reference that an `ActorSystem`
- * is constructed against.
+ * Type alias for the `components.actors` reference that a
+ * `ActorSystem` is constructed against. (The component directory is
+ * still named `actors` for historical reasons — the registry inside it
+ * now holds any `ProcessDefinition`.)
  */
-export type ActorsComponent = ComponentApi;
+export type ActorsComponent = ComponentApi
 
 /**
- * Shape of the app-level `execute` internalMutation that `ActorSystem`
- * passes to the component via function handle.
+ * Shape of the app-level `execute` internalMutation that
+ * `ActorSystem` passes to the component via function handle.
  */
 export type ExecuteRef = FunctionReference<
-  "mutation",
-  "internal",
+  'mutation',
+  'internal',
   {
-    actorType: string;
-    actorName: string;
-    msgType: string;
-    payload: unknown;
+    actorType: string
+    actorName: string
+    msgType: string
+    payload: unknown
   }
->;
+>
 
-export type RegisteredActorType<
-  Defs extends Record<string, AnyActorDefinition>,
-> = Defs[keyof Defs]["type"];
+export type RegisteredActorType<Defs extends Record<string, AnyProcess>> =
+  Defs[keyof Defs]['type']
 
 export type DefinitionByType<
-  Defs extends Record<string, AnyActorDefinition>,
+  Defs extends Record<string, AnyProcess>,
   T extends RegisteredActorType<Defs>,
-> = Extract<Defs[keyof Defs], { type: T }>;
+> = Extract<Defs[keyof Defs], { type: T }>
 
 /**
- * Container that ties actor definitions to a component reference and
- * provides methods for interacting with actors. Follows the workpool
- * pattern: methods take `ctx` (RunMutationCtx/RunQueryCtx) and call
- * component mutations/queries directly.
+ * Container that ties actor definitions to a component reference
+ * and provides methods for interacting with them.
  */
-export class ActorSystem<
-  Defs extends Record<string, AnyActorDefinition>,
-> {
-  readonly component: ActorsComponent;
-  readonly definitions: Defs;
-  private readonly byType: Map<string, AnyActorDefinition>;
+export class ActorSystem<Defs extends Record<string, AnyProcess>> {
+  readonly component: ActorsComponent
+  readonly definitions: Defs
+  private readonly byType: Map<string, AnyProcess>
 
-  constructor(
-    component: ActorsComponent,
-    definitions: Defs,
-  ) {
-    this.component = component;
-    this.definitions = definitions;
+  constructor(component: ActorsComponent, definitions: Defs) {
+    this.component = component
+    this.definitions = definitions
 
-    this.byType = new Map();
+    this.byType = new Map()
     for (const def of Object.values(definitions)) {
       if (this.byType.has(def.type)) {
-        throw new Error(
-          `ActorSystem: duplicate actor type "${def.type}"`,
-        );
+        throw new Error(`ActorSystem: duplicate actor type "${def.type}"`)
       }
-      this.byType.set(def.type, def);
+      this.byType.set(def.type, def)
     }
   }
 
   getDefinition<T extends RegisteredActorType<Defs>>(
     actorType: T,
   ): DefinitionByType<Defs, T> {
-    const def = this.byType.get(actorType);
+    const def = this.byType.get(actorType)
     if (!def) {
       throw new Error(
-        `ActorSystem: unknown actor type "${actorType}" (registered: ${[...this.byType.keys()].map((k) => `"${k}"`).join(", ") || "<none>"})`,
-      );
+        `ActorSystem: unknown actor type "${actorType}" (registered: ${[...this.byType.keys()].map((k) => `"${k}"`).join(', ') || '<none>'})`,
+      )
     }
-    return def as DefinitionByType<Defs, T>;
+    return def as DefinitionByType<Defs, T>
   }
 
   hasDefinition(
     actorType: string,
   ): actorType is RegisteredActorType<Defs> & string {
-    return this.byType.has(actorType);
+    return this.byType.has(actorType)
   }
 
-  allDefinitions(): Iterable<AnyActorDefinition> {
-    return this.byType.values();
+  allDefinitions(): Iterable<AnyProcess> {
+    return this.byType.values()
   }
 
   /**
    * Send a typed message to an actor. The definition object provides
    * compile-time checking of message name and payload shape.
    */
-  async send<D extends AnyActorDefinition, M extends MessageNamesOf<D>>(
+  async send<D extends AnyProcess, M extends MessageNamesOf<D>>(
     ctx: RunMutationCtx,
     executeRef: ExecuteRef,
     def: D,
     name: string,
     msgType: M,
-    payload: z.infer<D["messages"][M]["payload"]>,
-    opts?: { at?: number; after?: number },
+    payload: z.infer<D['messages'][M]['payload']>,
+    opts?: ScheduleOpts,
   ): Promise<string> {
-    return this.sendRaw(
-      ctx, executeRef, def.type, name, msgType as string, payload, opts,
-    );
+    return this.sendRaw(ctx, executeRef, def.type, name, msgType, payload, opts)
   }
 
   /**
    * Read an actor's projected public view. Returns `null` when the
    * actor doesn't exist or has no state yet.
    */
-  async peek<D extends AnyActorDefinition>(
+  async peek<D extends AnyProcess>(
     ctx: RunQueryCtx,
     def: D,
     name: string,
   ): Promise<ProjectionOf<D> | null> {
-    return this.peekRaw(ctx, def.type, name) as Promise<ProjectionOf<D> | null>;
+    return this.peekRaw(ctx, def.type, name) as Promise<ProjectionOf<D> | null>
   }
 
   /**
-   * Untyped send for the Convex mutation boundary where actorType and
-   * msgType arrive as plain strings. Validates actorType and msgType
-   * at runtime; payload shape is not validated (message validators are
-   * only used for compile-time type inference).
+   * Untyped send for the Convex mutation boundary where actorType
+   * and msgType arrive as plain strings. Validates both at runtime
+   * plus the payload shape.
    */
   async sendRaw(
     ctx: RunMutationCtx,
@@ -154,62 +147,56 @@ export class ActorSystem<
     name: string,
     msgType: string,
     payload: unknown,
-    opts?: { at?: number; after?: number },
+    opts?: ScheduleOpts,
   ): Promise<string> {
     if (!this.hasDefinition(actorType)) {
       throw new Error(
-        `send: unknown actor type "${actorType}" (registered: ${[
-          ...this.allDefinitions(),
-        ]
-          .map((d) => `"${d.type}"`)
-          .join(", ") || "<none>"})`,
-      );
+        `send: unknown actor type "${actorType}" (registered: ${
+          [...this.allDefinitions()].map((d) => `"${d.type}"`).join(', ') ||
+          '<none>'
+        })`,
+      )
     }
-    const def = this.getDefinition(actorType);
+    const def = this.getDefinition(actorType)
     if (!(msgType in def.messages)) {
       throw new Error(
-        `send: unknown msgType "${msgType}" for actor type "${actorType}" (valid: ${Object.keys(
-          def.messages,
-        )
-          .map((k) => `"${k}"`)
-          .join(", ") || "<none>"})`,
-      );
+        `send: unknown msgType "${msgType}" for actor type "${actorType}" (valid: ${
+          Object.keys(def.messages)
+            .map((k) => `"${k}"`)
+            .join(', ') || '<none>'
+        })`,
+      )
     }
 
     // Validate payload against the Zod schema
-    const schema = def.messages[msgType].payload;
-    const parsed = schema.safeParse(payload);
+    const schema = def.messages[msgType].payload
+    const parsed = schema.safeParse(payload)
     if (!parsed.success) {
       throw new Error(
         `send: invalid payload for "${actorType}.${msgType}": ${parsed.error.message}`,
-      );
+      )
     }
-    payload = parsed.data;
+    payload = parsed.data
 
-    const now = Date.now();
-    let deliverAt: number;
+    const now = Date.now()
+    let deliverAt: number
     if (opts?.at !== undefined) {
-      deliverAt = opts.at;
+      deliverAt = opts.at
     } else if (opts?.after !== undefined) {
-      deliverAt = now + opts.after;
+      deliverAt = now + opts.after
     } else {
-      deliverAt = now;
+      deliverAt = now
     }
-    if (deliverAt < now) deliverAt = now;
+    if (deliverAt < now) deliverAt = now
 
-    const executeFn = await createFunctionHandle(executeRef);
+    const executeFn = await createFunctionHandle(executeRef)
 
-    const ids = await ctx.runMutation(
-      this.component.enqueue.enqueueMessage,
-      {
-        effects: [
-          { actorType, name, msgType, payload, deliverAt },
-        ],
-        executeFn,
-      },
-    );
+    const ids = await ctx.runMutation(this.component.enqueue.enqueueMessage, {
+      effects: [{ actorType: actorType, name, msgType, payload, deliverAt }],
+      executeFn,
+    })
 
-    return ids[0];
+    return ids[0]
   }
 
   /**
@@ -222,22 +209,21 @@ export class ActorSystem<
   ): Promise<unknown> {
     if (!this.hasDefinition(actorType)) {
       throw new Error(
-        `peek: unknown actor type "${actorType}" (registered: ${[
-          ...this.allDefinitions(),
-        ]
-          .map((d) => `"${d.type}"`)
-          .join(", ") || "<none>"})`,
-      );
+        `peek: unknown actor type "${actorType}" (registered: ${
+          [...this.allDefinitions()].map((d) => `"${d.type}"`).join(', ') ||
+          '<none>'
+        })`,
+      )
     }
-    const def = this.getDefinition(actorType);
-    if (!def.project) return null;
+    const def = this.getDefinition(actorType)
+    if (!def.project) return null
 
-    const state = await ctx.runQuery(
-      this.component.actors.getActorState,
-      { actorType, name },
-    );
-    if (state === null || state === undefined) return null;
-    return def.project(state);
+    const state = await ctx.runQuery(this.component.actors.getActorState, {
+      actorType: actorType,
+      name,
+    })
+    if (state === null || state === undefined) return null
+    return def.project(state)
   }
 
   /**
@@ -248,15 +234,14 @@ export class ActorSystem<
     ctx: RunQueryCtx,
     args: { messageId: string },
   ): Promise<{
-    messageId: string;
+    messageId: string
     response:
-      | { kind: "success"; value: unknown }
-      | { kind: "fail"; reason: string; details?: unknown }
-      | { kind: "defect"; error: string; attempts: number };
+      | { kind: 'success'; value: unknown }
+      | { kind: 'fail'; reason: string; details?: unknown }
+      | { kind: 'defect'; error: string; attempts: number }
   } | null> {
-    return await ctx.runQuery(
-      this.component.responses.getResponseRow,
-      { messageId: args.messageId },
-    );
+    return await ctx.runQuery(this.component.responses.getResponseRow, {
+      messageId: args.messageId,
+    })
   }
 }
