@@ -17,6 +17,7 @@ import type * as client_execute from "../client/execute.js";
 import type * as client_index from "../client/index.js";
 import type * as client_react from "../client/react.js";
 import type * as client_system from "../client/system.js";
+import type * as client_testing from "../client/testing.js";
 import type * as crons from "../crons.js";
 import type * as drain from "../drain.js";
 import type * as enqueue from "../enqueue.js";
@@ -43,6 +44,7 @@ const fullApi: ApiFromModules<{
   "client/index": typeof client_index;
   "client/react": typeof client_react;
   "client/system": typeof client_system;
+  "client/testing": typeof client_testing;
   crons: typeof crons;
   drain: typeof drain;
   enqueue: typeof enqueue;
