@@ -1,9 +1,10 @@
 import type { FunctionHandle } from 'convex/server'
+import { v } from 'convex/values'
 import type { Doc, Id } from './_generated/dataModel.js'
 import { internal } from './_generated/api.js'
-import type { MutationCtx } from './_generated/server.js'
+import { internalMutation, type MutationCtx } from './_generated/server.js'
 import { getBookkeepingRow, getSignalRow } from './actors.js'
-import { createLogger, type LogLevel, type Logger } from './logging.js'
+import { createLogger, logLevel, type LogLevel, type Logger } from './logging.js'
 import {
   KICK_EPSILON_MS,
   boundScheduledTime,
@@ -101,3 +102,28 @@ export async function kickMailbox(
     executeFn: args.executeFn,
   })
 }
+
+/**
+ * Schedulable wrapper around `kickMailbox`. Drain schedules one of
+ * these per distinct target actor at delay 0, so each cross-actor
+ * kick runs in its own transaction — isolating contention from the
+ * processing transaction.
+ */
+export const kickActor = internalMutation({
+  args: {
+    actorId: v.id('actor'),
+    deliverAt: v.number(),
+    executeFn: v.string(),
+    logLevel: v.optional(logLevel),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await kickMailbox(ctx, {
+      actorId: args.actorId,
+      deliverAt: args.deliverAt,
+      executeFn: args.executeFn as ExecuteFnHandle,
+      logLevel: args.logLevel,
+    })
+    return null
+  },
+})

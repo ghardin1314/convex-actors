@@ -8,6 +8,13 @@ import { now, vReplyTo, type Effect } from './shared.js'
 import { recordEnqueued } from './stats.js'
 
 /**
+ * Map of actor ID → earliest deliverAt for that actor in the batch.
+ * Returned by `enqueueMessageHandler` so callers can decide whether
+ * to kick inline (public enqueue) or schedule deferred kicks (drain).
+ */
+export type KickTargets = Map<Id<'actor'>, { deliverAt: number }>
+
+/**
  * Single effect to apply: a message targeted at one `(actorType, name)`
  * address. The `enqueueMessage` mutation accepts an array of these so
  * both the top-level `send` path and the drain's effect-list application
@@ -48,27 +55,41 @@ export const enqueueMessage = mutation({
   args: vEnqueueArgs,
   returns: v.array(v.id('messages')),
   handler: async (ctx, { effects, executeFn, logLevel }) => {
-    return await enqueueMessageHandler(
+    const logger = createLogger(logLevel)
+    const { messageIds, kickTargets } = await enqueueMessageHandler(
       ctx,
       effects,
       executeFn as ExecuteFnHandle,
       logLevel,
     )
+    for (const [actorId, { deliverAt }] of kickTargets) {
+      await kickMailbox(
+        ctx,
+        { actorId, deliverAt, executeFn: executeFn as ExecuteFnHandle },
+        logger,
+      )
+    }
+    return messageIds
   },
 })
 
+/**
+ * Insert `messages` + `pendingMessages` rows for each effect. Returns
+ * the inserted message IDs and a map of kick targets (actor → earliest
+ * deliverAt). The caller decides whether to kick inline or defer.
+ */
 export async function enqueueMessageHandler(
   ctx: MutationCtx,
   effects: Effect[],
   executeFn: ExecuteFnHandle,
   level?: LogLevel,
-): Promise<Array<Id<'messages'>>> {
+): Promise<{ messageIds: Array<Id<'messages'>>; kickTargets: KickTargets }> {
   const logger = createLogger(level)
   const sentAt = now()
   const messageIds: Array<Id<'messages'>> = []
+  const kickTargets: KickTargets = new Map()
 
   const actorIdCache = new Map<string, Id<'actor'>>()
-  const earliestByActor = new Map<Id<'actor'>, number>()
 
   for (let i = 0; i < effects.length; i++) {
     const effect = effects[i]
@@ -108,15 +129,11 @@ export async function enqueueMessageHandler(
       deliverAt: effect.deliverAt,
     })
 
-    const prev = earliestByActor.get(actorId)
-    if (prev === undefined || effect.deliverAt < prev) {
-      earliestByActor.set(actorId, effect.deliverAt)
+    const prev = kickTargets.get(actorId)
+    if (prev === undefined || effect.deliverAt < prev.deliverAt) {
+      kickTargets.set(actorId, { deliverAt: effect.deliverAt })
     }
   }
 
-  for (const [actorId, deliverAt] of earliestByActor) {
-    await kickMailbox(ctx, { actorId, deliverAt, executeFn }, logger)
-  }
-
-  return messageIds
+  return { messageIds, kickTargets }
 }

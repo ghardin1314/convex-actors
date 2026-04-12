@@ -80,7 +80,7 @@ async function drainUntilIdle(
       actorType,
       name,
     });
-    if (!info || info.drainKind === "idle") break;
+    if (!info || (info.drainKind === "idle" && !info.hasPendingMessages)) break;
 
     await t.mutation(internal.drain.drainLoop, {
       actorId: info.actorId,

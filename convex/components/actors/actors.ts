@@ -117,10 +117,15 @@ export const getMailboxInfo = query({
     if (!actor) return null;
     const signal = await getSignalRow(ctx, actor._id);
     if (!signal) return null;
+    const pending = await ctx.db
+      .query('pendingMessages')
+      .withIndex('by_actor_deliverable', (q) => q.eq('actorId', actor._id))
+      .first()
     return {
       actorId: actor._id,
       generation: signal.generation,
       drainKind: signal.drainKind,
+      hasPendingMessages: pending !== null,
     };
   },
 });

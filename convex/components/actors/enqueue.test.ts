@@ -1,10 +1,10 @@
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
 import { createFunctionHandle } from "convex/server";
-import { assert, beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api.js";
 import { enqueueMessageHandler } from "./enqueue.js";
-import { getActorRow, getSignalRow, getBookkeepingRow } from "./actors.js";
+import { getActorRow, getSignalRow } from "./actors.js";
 import schema from "./schema.js";
 
 async function makeExecuteHandle() {
@@ -28,7 +28,7 @@ describe("enqueueMessageHandler", () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const ids = await enqueueMessageHandler(ctx, [
+      const { messageIds, kickTargets } = await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
           name: "a",
@@ -38,19 +38,20 @@ describe("enqueueMessageHandler", () => {
         },
       ], executeFn);
 
-      expect(ids).toHaveLength(1);
+      expect(messageIds).toHaveLength(1);
 
       const actor = await getActorRow(ctx, "counter", "a");
       expect(actor).not.toBeNull();
       const signal = await getSignalRow(ctx, actor!._id);
-      assert(signal?.drainKind === "scheduled");
-      const bk = await getBookkeepingRow(ctx, actor!._id);
-      expect(bk?.drainAt).toBe(T0);
+      expect(signal?.drainKind).toBe("idle");
+
+      expect(kickTargets.size).toBe(1);
+      expect(kickTargets.get(actor!._id)).toEqual({ deliverAt: T0 });
 
       const messages = await ctx.db.query("messages").collect();
       expect(messages).toHaveLength(1);
       expect(messages[0]).toMatchObject({
-        _id: ids[0],
+        _id: messageIds[0],
         actorId: actor!._id,
         msgType: "inc",
         payload: { by: 1 },
@@ -61,7 +62,7 @@ describe("enqueueMessageHandler", () => {
       const pending = await ctx.db.query("pendingMessages").collect();
       expect(pending).toHaveLength(1);
       expect(pending[0]).toMatchObject({
-        messageId: ids[0],
+        messageId: messageIds[0],
         actorId: actor!._id,
         deliverAt: T0,
         sendSeq: 0,
@@ -108,7 +109,7 @@ describe("enqueueMessageHandler", () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const ids = await enqueueMessageHandler(ctx, [
+      const { messageIds } = await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
           name: "a",
@@ -132,7 +133,7 @@ describe("enqueueMessageHandler", () => {
         },
       ], executeFn);
 
-      expect(ids).toHaveLength(3);
+      expect(messageIds).toHaveLength(3);
       const actor = (await getActorRow(ctx, "counter", "a"))!;
 
       const pending = await ctx.db
@@ -143,7 +144,7 @@ describe("enqueueMessageHandler", () => {
         .collect();
 
       expect(pending.map((p) => p.sendSeq)).toEqual([0, 1, 2]);
-      expect(pending.map((p) => p.messageId)).toEqual(ids);
+      expect(pending.map((p) => p.messageId)).toEqual(messageIds);
       for (const row of pending) {
         expect(row.attempts).toBe(0);
         expect(row.deliverAt).toBe(T0);
@@ -312,11 +313,11 @@ describe("enqueueMessageHandler", () => {
     });
   });
 
-  test("send from idle kicks a drain at the earliest deliverAt in the batch", async () => {
+  test("batch returns earliest deliverAt per target in kickTargets", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      await enqueueMessageHandler(ctx, [
+      const { kickTargets } = await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
           name: "a",
@@ -341,27 +342,12 @@ describe("enqueueMessageHandler", () => {
       ], executeFn);
 
       const actor = (await getActorRow(ctx, "counter", "a"))!;
-      const signal = (await getSignalRow(ctx, actor._id))!;
-      const bk = (await getBookkeepingRow(ctx, actor._id))!;
-      assert(signal.drainKind === "scheduled");
-      expect(bk.drainAt).toBe(T0 + 500);
-
-      const scheduled = await ctx.db.system
-        .query("_scheduled_functions")
-        .collect();
-      expect(scheduled).toHaveLength(1);
-      expect(scheduled[0].state.kind).toBe("pending");
-      expect(scheduled[0].scheduledTime).toBe(T0 + 500);
-      expect(scheduled[0].args[0]).toEqual({
-        actorId: actor._id,
-        generation: 0,
-        executeFn,
-        cursorTs: T0 + 500,
-      });
+      expect(kickTargets.size).toBe(1);
+      expect(kickTargets.get(actor._id)).toEqual({ deliverAt: T0 + 500 });
     });
   });
 
-  test("second send at a later deliverAt with drain already scheduled is a no-op on the scheduler", async () => {
+  test("second send to same target still returns that target in kickTargets", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
@@ -376,12 +362,8 @@ describe("enqueueMessageHandler", () => {
       ], executeFn);
 
       const actor = (await getActorRow(ctx, "counter", "a"))!;
-      const beforeSignal = (await getSignalRow(ctx, actor._id))!;
-      const beforeBk = (await getBookkeepingRow(ctx, actor._id))!;
-      assert(beforeSignal.drainKind === "scheduled");
-      const originalScheduledId = beforeBk.drainScheduledId;
 
-      await enqueueMessageHandler(ctx, [
+      const { kickTargets } = await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
           name: "a",
@@ -391,25 +373,16 @@ describe("enqueueMessageHandler", () => {
         },
       ], executeFn);
 
-      const afterSignal = (await getSignalRow(ctx, actor._id))!;
-      const afterBk = (await getBookkeepingRow(ctx, actor._id))!;
-      assert(afterSignal.drainKind === "scheduled");
-      expect(afterBk.drainScheduledId).toBe(originalScheduledId);
-      expect(afterBk.drainAt).toBe(T0 + 1000);
-
-      const scheduled = await ctx.db.system
-        .query("_scheduled_functions")
-        .collect();
-      expect(scheduled).toHaveLength(1);
-      expect(scheduled[0].state.kind).toBe("pending");
+      expect(kickTargets.size).toBe(1);
+      expect(kickTargets.get(actor._id)).toEqual({ deliverAt: T0 + 10_000 });
     });
   });
 
-  test("multi-target batch kicks every distinct target exactly once", async () => {
+  test("multi-target batch returns every distinct target with earliest deliverAt", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      await enqueueMessageHandler(ctx, [
+      const { kickTargets } = await enqueueMessageHandler(ctx, [
         {
           actorType: "counter",
           name: "a",
@@ -436,27 +409,9 @@ describe("enqueueMessageHandler", () => {
       const a = (await getActorRow(ctx, "counter", "a"))!;
       const b = (await getActorRow(ctx, "counter", "b"))!;
 
-      const signalA = (await getSignalRow(ctx, a._id))!;
-      const signalB = (await getSignalRow(ctx, b._id))!;
-      const bkA = (await getBookkeepingRow(ctx, a._id))!;
-      const bkB = (await getBookkeepingRow(ctx, b._id))!;
-      assert(signalA.drainKind === "scheduled");
-      assert(signalB.drainKind === "scheduled");
-      expect(bkA.drainAt).toBe(T0 + 500);
-      expect(bkB.drainAt).toBe(T0 + 2000);
-
-      const scheduled = await ctx.db.system
-        .query("_scheduled_functions")
-        .collect();
-      expect(scheduled).toHaveLength(2);
-      const byActor = new Map(
-        scheduled.map((s) => [
-          (s.args[0] as { actorId: string }).actorId,
-          s,
-        ]),
-      );
-      expect(byActor.get(a._id)!.scheduledTime).toBe(T0 + 500);
-      expect(byActor.get(b._id)!.scheduledTime).toBe(T0 + 2000);
+      expect(kickTargets.size).toBe(2);
+      expect(kickTargets.get(a._id)).toEqual({ deliverAt: T0 + 500 });
+      expect(kickTargets.get(b._id)).toEqual({ deliverAt: T0 + 2000 });
     });
   });
 });

@@ -16,15 +16,50 @@ import { internal } from './_generated/api.js'
 import type { Doc, Id } from './_generated/dataModel.js'
 import { internalMutation, type MutationCtx } from './_generated/server.js'
 import { getActorStateRow, getBookkeepingRow, getSignalRow } from './actors.js'
-import { enqueueMessageHandler } from './enqueue.js'
+import { enqueueMessageHandler, type KickTargets } from './enqueue.js'
 import type { ExecuteFnHandle } from './kick.js'
 import { createLogger, logLevel, type LogLevel } from './logging.js'
 import { boundScheduledTime, MAX_ATTEMPTS, now } from './shared.js'
 import { recordCompleted, recordStarted } from './stats.js'
 
+/** Merge `src` kick targets into `dst`, keeping the earliest deliverAt per actor. */
+function mergeKickTargets(dst: KickTargets, src: KickTargets) {
+  for (const [actorId, entry] of src) {
+    const prev = dst.get(actorId)
+    if (prev === undefined || entry.deliverAt < prev.deliverAt) {
+      dst.set(actorId, entry)
+    }
+  }
+}
+
+/**
+ * Schedule one `kickActor` mutation per distinct target actor at delay 0.
+ * Each runs in its own transaction, isolating cross-actor contention
+ * from the drain's processing transaction. Skips the current actor —
+ * it's already draining, so a kick would be a no-op.
+ */
+async function scheduleDeferredKicks(
+  ctx: MutationCtx,
+  kickTargets: KickTargets,
+  selfActorId: Id<'actor'>,
+  executeFn: string,
+  logLevel?: LogLevel,
+) {
+  for (const [actorId, { deliverAt }] of kickTargets) {
+    if (actorId === selfActorId) continue
+    await ctx.scheduler.runAfter(0, internal.kick.kickActor, {
+      actorId,
+      deliverAt,
+      executeFn,
+      logLevel,
+    })
+  }
+}
+
 /**
  * After writing a response, check if the original message had a
  * `replyTo` route and enqueue the reply to the asking actor.
+ * Returns kick targets for the reply's target actor (caller defers kicks).
  */
 async function maybeRouteReply(
   ctx: MutationCtx,
@@ -36,9 +71,9 @@ async function maybeRouteReply(
     | { kind: 'defect'; error: string },
   executeFn: string,
   level?: LogLevel,
-) {
+): Promise<KickTargets> {
   const rt = message.replyTo
-  if (!rt) return
+  if (!rt) return new Map()
 
   let result: unknown
   if (outcome.kind === 'success') {
@@ -49,7 +84,7 @@ async function maybeRouteReply(
     result = { kind: 'defect', error: outcome.error }
   }
 
-  await enqueueMessageHandler(
+  const { kickTargets } = await enqueueMessageHandler(
     ctx,
     [
       {
@@ -67,6 +102,7 @@ async function maybeRouteReply(
     executeFn as ExecuteFnHandle,
     level,
   )
+  return kickTargets
 }
 
 type SignalPatch = Pick<Doc<'drainSignal'>, 'drainKind'>
@@ -152,6 +188,9 @@ export const drainLoop = internalMutation({
       messageId: message._id,
     }
 
+    // Accumulate cross-actor kick targets; deferred until after commit
+    const allKickTargets: KickTargets = new Map()
+
     // ── Attempts guard ──────────────────────────────────────
     if (pending.attempts >= MAX_ATTEMPTS) {
       const defectError = `handler exhausted ${pending.attempts} attempts`
@@ -165,7 +204,7 @@ export const drainLoop = internalMutation({
           attempts: pending.attempts,
         },
       })
-      await maybeRouteReply(
+      const replyKicks = await maybeRouteReply(
         ctx,
         message,
         actor,
@@ -173,7 +212,9 @@ export const drainLoop = internalMutation({
         args.executeFn,
         args.logLevel,
       )
+      mergeKickTargets(allKickTargets, replyKicks)
       await ctx.db.delete(pending._id)
+      await scheduleDeferredKicks(ctx, allKickTargets, args.actorId, args.executeFn, args.logLevel)
       await scheduleNextOrDelegate(ctx, args, signal._id, bookkeeping._id, generation)
       return null
     }
@@ -203,12 +244,13 @@ export const drainLoop = internalMutation({
       }
 
       if (result.effects.length > 0) {
-        await enqueueMessageHandler(
+        const { kickTargets } = await enqueueMessageHandler(
           ctx,
           result.effects,
           args.executeFn as ExecuteFnHandle,
           args.logLevel,
         )
+        mergeKickTargets(allKickTargets, kickTargets)
       }
 
       await ctx.db.insert('responses', {
@@ -216,7 +258,7 @@ export const drainLoop = internalMutation({
         actorId: args.actorId,
         response: { kind: 'success', value: result.response },
       })
-      await maybeRouteReply(
+      const replyKicks = await maybeRouteReply(
         ctx,
         message,
         actor,
@@ -224,6 +266,7 @@ export const drainLoop = internalMutation({
         args.executeFn,
         args.logLevel,
       )
+      mergeKickTargets(allKickTargets, replyKicks)
       await ctx.db.delete(pending._id)
     } else if (result.outcome === 'fail') {
       recordCompleted(logger, { ...eventBase, outcome: 'fail', attempts: pending.attempts })
@@ -236,7 +279,7 @@ export const drainLoop = internalMutation({
           details: result.details,
         },
       })
-      await maybeRouteReply(
+      const replyKicks = await maybeRouteReply(
         ctx,
         message,
         actor,
@@ -244,6 +287,7 @@ export const drainLoop = internalMutation({
         args.executeFn,
         args.logLevel,
       )
+      mergeKickTargets(allKickTargets, replyKicks)
       await ctx.db.delete(pending._id)
     } else {
       // Defect outcome
@@ -259,7 +303,7 @@ export const drainLoop = internalMutation({
             attempts: newAttempts,
           },
         })
-        await maybeRouteReply(
+        const replyKicks = await maybeRouteReply(
           ctx,
           message,
           actor,
@@ -267,11 +311,15 @@ export const drainLoop = internalMutation({
           args.executeFn,
           args.logLevel,
         )
+        mergeKickTargets(allKickTargets, replyKicks)
         await ctx.db.delete(pending._id)
       } else {
         await ctx.db.patch(pending._id, { attempts: newAttempts })
       }
     }
+
+    // ── Deferred cross-actor kicks ──────────────────────────
+    await scheduleDeferredKicks(ctx, allKickTargets, args.actorId, args.executeFn, args.logLevel)
 
     // ── Schedule next or delegate ───────────────────────────
     await scheduleNextOrDelegate(ctx, args, signal._id, bookkeeping._id, generation)
