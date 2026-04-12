@@ -14,6 +14,7 @@
  * framework's step runner both call it internally.
  */
 import type { z } from "zod";
+import type { Logger } from "../logging.js";
 import type {
   AnyProcess,
   MessageNamesOf,
@@ -117,6 +118,7 @@ export interface BaseSelfStub {
  */
 export interface InternalProcessCtx {
   self: BaseSelfStub;
+  logger: Logger;
   now(): number;
   fail(reason: string, details?: unknown): never;
   stub<D extends AnyProcess>(def: D, name: string): BaseStub<D>;
@@ -149,6 +151,7 @@ export interface CreateProcessCtxArgs {
   selfName: string;
   /** Stable timestamp for this drain invocation. */
   now: number;
+  logger: Logger;
   /**
    * Called by `stub.peek()`. Bound by the drain wrapper to
    * `ctx.runQuery(component.actors.getActorState, ...) →
@@ -233,6 +236,7 @@ export function createProcessCtx(
 
   const ctx: InternalProcessCtx = {
     self,
+    logger: args.logger,
     now: () => args.now,
     fail(reason: string, details?: unknown): never {
       throw new FailSentinel(reason, details);

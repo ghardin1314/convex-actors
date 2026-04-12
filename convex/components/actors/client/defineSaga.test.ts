@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, test } from "vitest";
 
 import { defineActor } from "./defineActor";
 import { createProcessCtx } from "./ctx";
+import { createLogger } from "../logging.js";
 import type { AnyProcess } from "./defineProcess";
 import type { Effect } from "../shared.js";
 import { defineSaga, type SagaProjection, type SagaState } from "./defineSaga";
@@ -67,6 +68,7 @@ function runSagaHandler(
     selfDefinition: sagaDef,
     selfName: "saga-1",
     now: T0,
+    logger: createLogger(),
     peekFn: async () => null,
   });
 

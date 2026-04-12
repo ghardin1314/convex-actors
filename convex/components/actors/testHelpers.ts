@@ -8,9 +8,10 @@ import { v } from "convex/values";
 import { createDraft, finishDraft } from "immer";
 import { internalMutation } from "./_generated/server.js";
 import { getActorRow } from "./actors.js";
-import { defineActor } from "./client/defineActor.js";
+import { createLogger, type LogLevel } from "./logging.js";
 import { createProcessCtx, FailSentinel } from "./client/ctx.js";
 import type { AnyProcess } from "./client/defineProcess.js";
+import { defineActor } from "./client/defineActor.js";
 
 // ── Test actor definitions ───────────────────────────────────────
 
@@ -93,6 +94,7 @@ export const testExecute = internalMutation({
     actorName: v.string(),
     msgType: v.string(),
     payload: v.any(),
+    logLevel: v.string(),
   },
   returns: v.any(),
   handler: async (ctx, args) => {
@@ -119,6 +121,7 @@ export const testExecute = internalMutation({
       selfDefinition: def,
       selfName: args.actorName,
       now: Date.now(),
+      logger: createLogger(args.logLevel as LogLevel),
       peekFn: async (actorType, name) => {
         const target = await getActorRow(ctx, actorType, name);
         if (!target?.state) return null;

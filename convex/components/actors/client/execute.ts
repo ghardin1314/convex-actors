@@ -11,6 +11,7 @@
 import { createDraft, finishDraft } from "immer";
 import { internalMutationGeneric } from "convex/server";
 import { v } from "convex/values";
+import { createLogger, logLevel } from "../logging.js";
 import type { AnyProcess } from "./defineProcess";
 import { createProcessCtx, FailSentinel } from "./ctx";
 import type { ActorsComponent } from "./system";
@@ -53,6 +54,7 @@ export function makeExecute(
       actorName: v.string(),
       msgType: v.string(),
       payload: v.any(),
+      logLevel,
     },
     returns: v.any(),
     handler: async (ctx, args): Promise<ExecuteOutcome> => {
@@ -85,10 +87,13 @@ export function makeExecute(
           ? rawState
           : def.initialState();
 
+      const logger = createLogger(args.logLevel);
+
       const { ctx: processCtx, internals } = createProcessCtx({
         selfDefinition: def,
         selfName: args.actorName,
         now: Date.now(),
+        logger,
         peekFn: async (actorType, name) => {
           const state = await ctx.runQuery(
             component.actors.getActorState,

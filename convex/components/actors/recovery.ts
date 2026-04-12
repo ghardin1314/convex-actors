@@ -12,7 +12,9 @@ import {
 import { internal } from "./_generated/api.js";
 import { getMailboxRow } from "./actors.js";
 import { kickMailbox, type ExecuteFnHandle } from "./kick.js";
+import { createLogger } from "./logging.js";
 import { now, RECOVERY_THRESHOLD_MS } from "./shared.js";
+import { recordRecovered } from "./stats.js";
 
 /**
  * Returns mailboxState rows where the drain has been `running` longer
@@ -40,9 +42,10 @@ export const recoverMailbox = internalMutation({
   args: { actorId: v.id("actor") },
   returns: v.null(),
   handler: async (ctx, { actorId }) => {
+    const logger = createLogger();
     const mailbox = await getMailboxRow(ctx, actorId);
     if (!mailbox) {
-      console.warn(`[recovery] no mailboxState for actor ${actorId}`);
+      logger.warn(`[recovery] no mailboxState for actor ${actorId}`);
       return null;
     }
 
@@ -68,6 +71,11 @@ export const recoverMailbox = internalMutation({
       actorId,
       deliverAt: now(),
       executeFn: mailbox.executeFn as ExecuteFnHandle,
+    }, logger);
+
+    recordRecovered(logger, {
+      actorId,
+      stuckDurationMs: now() - mailbox.drainStartedAt!,
     });
 
     return null;
@@ -83,10 +91,14 @@ export const runRecoveryScan = internalAction({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
+    const logger = createLogger();
     const stuck = await ctx.runQuery(
       internal.recovery.listStuckMailboxes,
       {},
     );
+    if (stuck.length > 0) {
+      logger.info(`[recovery] found ${stuck.length} stuck mailbox(es)`);
+    }
     for (const mailbox of stuck) {
       await ctx.runMutation(internal.recovery.recoverMailbox, {
         actorId: mailbox.actorId,

@@ -99,6 +99,7 @@ export declare const components: {
             };
           }>;
           executeFn: string;
+          logLevel?: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
         },
         Array<string>
       >;

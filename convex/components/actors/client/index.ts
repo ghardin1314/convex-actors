@@ -63,6 +63,7 @@ export type {
 export { ActorSystem } from "./system";
 export type {
   ActorsComponent,
+  ActorSystemOptions,
   ExecuteRef,
   RegisteredActorType,
   DefinitionByType,
@@ -72,6 +73,10 @@ export type {
 
 // ── Execute factory ─────────────────────────────────────────────
 export { makeExecute } from "./execute";
+
+// ── Logging ────────────────────────────────────────────────────
+export { logLevel as vLogLevel } from "../logging.js";
+export type { LogLevel } from "../logging.js";
 
 // ── Error + effect types (useful in tests + diagnostics) ────────
 export { FailSentinel, resolveDeliverAt } from "./ctx";

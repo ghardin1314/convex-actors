@@ -3,7 +3,9 @@ import type { Id } from './_generated/dataModel.js'
 import { mutation, type MutationCtx } from './_generated/server.js'
 import { getOrCreateActorRow } from './actors.js'
 import { kickMailbox, type ExecuteFnHandle } from './kick.js'
+import { createLogger, logLevel, type LogLevel } from './logging.js'
 import { now, vReplyTo, type Effect } from './shared.js'
+import { recordEnqueued } from './stats.js'
 
 /**
  * Single effect to apply: a message targeted at one `(actorType, name)`
@@ -22,13 +24,8 @@ export const vEffect = v.object({
 
 const vEnqueueArgs = {
   effects: v.array(vEffect),
-  // `FunctionHandle` serializes as a branded string; we accept it as
-  // `v.string()` at the validator boundary and narrow to `string`
-  // at the type level inside the handler. The component has no static
-  // reference to the app-level `drain` — callers produce the handle via
-  // `createFunctionHandle(...)` and pass it on every send so a redeploy
-  // that renames the drain function can't leave stale handles around.
   executeFn: v.string(),
+  logLevel: v.optional(logLevel),
 }
 
 /**
@@ -50,11 +47,12 @@ const vEnqueueArgs = {
 export const enqueueMessage = mutation({
   args: vEnqueueArgs,
   returns: v.array(v.id('messages')),
-  handler: async (ctx, { effects, executeFn }) => {
+  handler: async (ctx, { effects, executeFn, logLevel }) => {
     return await enqueueMessageHandler(
       ctx,
       effects,
       executeFn as ExecuteFnHandle,
+      logLevel,
     )
   },
 })
@@ -63,26 +61,15 @@ export async function enqueueMessageHandler(
   ctx: MutationCtx,
   effects: Effect[],
   executeFn: ExecuteFnHandle,
+  level?: LogLevel,
 ): Promise<Array<Id<'messages'>>> {
+  const logger = createLogger(level)
   const sentAt = now()
   const messageIds: Array<Id<'messages'>> = []
 
-  // Cache `(actorType, name) -> actorId` within this call so a batch
-  // re-targeting the same address only pays one index lookup and only
-  // runs the lazy-create branch once.
   const actorIdCache = new Map<string, Id<'actor'>>()
-
-  // Per-actor earliest `deliverAt` so we can issue exactly one kick
-  // per distinct target with the tightest deadline this batch
-  // contributes. Batches targeting two actors → two kicks; a batch
-  // re-targeting the same actor at multiple deliverAts → one kick at
-  // the min.
   const earliestByActor = new Map<Id<'actor'>, number>()
 
-  // `sendSeq = i` is the input index and acts as
-  // the deterministic tiebreaker in `by_actor_deliverable` for effects
-  // with equal `(actorId, deliverAt)`.
-  // Potential to parallelize this loop in the future, pending benchmarks.
   for (let i = 0; i < effects.length; i++) {
     const effect = effects[i]
     const key = `${effect.actorType}\u0000${effect.name}`
@@ -113,6 +100,13 @@ export async function enqueueMessageHandler(
       attempts: 0,
     })
     messageIds.push(messageId)
+    recordEnqueued(logger, {
+      actorType: effect.actorType,
+      name: effect.name,
+      msgType: effect.msgType,
+      messageId,
+      deliverAt: effect.deliverAt,
+    })
 
     const prev = earliestByActor.get(actorId)
     if (prev === undefined || effect.deliverAt < prev) {
@@ -120,10 +114,8 @@ export async function enqueueMessageHandler(
     }
   }
 
-  // Kicks are issued after all inserts so that the kick's state-machine
-  // read of `mailboxState` sees a fully-populated mailbox. Potential to parallelize in the future..
   for (const [actorId, deliverAt] of earliestByActor) {
-    await kickMailbox(ctx, { actorId, deliverAt, executeFn })
+    await kickMailbox(ctx, { actorId, deliverAt, executeFn }, logger)
   }
 
   return messageIds

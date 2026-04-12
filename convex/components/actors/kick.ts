@@ -3,21 +3,13 @@ import type { Id } from './_generated/dataModel.js'
 import { internal } from './_generated/api.js'
 import type { MutationCtx } from './_generated/server.js'
 import { getMailboxRow } from './actors.js'
+import { createLogger, type LogLevel, type Logger } from './logging.js'
 import {
   KICK_EPSILON_MS,
   boundScheduledTime,
   type ExecuteOutcome,
 } from './shared.js'
 
-/**
- * Shape of the app-level `execute` internalMutation that the drain
- * loop calls to invoke actor handlers. The component receives this
- * handle from the app via `send` and propagates it through the
- * drain loop and effect kicks. `ExecuteOutcome` (in `shared.ts`) is
- * the authoritative return shape — the producer `makeExecute` in
- * `client/execute.ts` annotates its handler with it, and the drain
- * loop reads it through this handle's third generic.
- */
 export type ExecuteFnHandle = FunctionHandle<
   'mutation',
   {
@@ -25,34 +17,22 @@ export type ExecuteFnHandle = FunctionHandle<
     actorName: string
     msgType: string
     payload: unknown
+    logLevel: LogLevel
   },
   ExecuteOutcome
 >
 
-/**
- * Move a mailbox toward the `scheduled` state so that the component's
- * drain loop will run at or before `deliverAt`. Pure state-machine
- * logic — no pending-row reads, no handler invocation.
- *
- * `executeFn` is the app-level execute function handle. It's passed
- * through to the scheduled drain loop so the loop can invoke the
- * handler. The component schedules its own `internal.drain.drainLoop`;
- * the execute handle self-propagates through the loop and effect kicks.
- *
- * Transitions:
- * - `running` → no-op.
- * - `scheduled` with `at <= deliverAt + KICK_EPSILON_MS` → no-op.
- * - `scheduled` otherwise → cancel old, schedule new.
- * - `idle` → schedule, write `scheduled`.
- */
 export async function kickMailbox(
   ctx: MutationCtx,
   args: {
     actorId: Id<'actor'>
     deliverAt: number
     executeFn: ExecuteFnHandle
+    logLevel?: LogLevel
   },
+  logger?: Logger,
 ): Promise<void> {
+  const log = logger ?? createLogger()
   const mailbox = await getMailboxRow(ctx, args.actorId)
   if (mailbox === null) {
     throw new Error(
@@ -72,11 +52,11 @@ export async function kickMailbox(
     }
     const scheduled = await ctx.db.system.get(mailbox.drainScheduledId!)
     if (scheduled === null) {
-      console.warn(
+      log.warn(
         `[kick] actor ${args.actorId} scheduledId ${mailbox.drainScheduledId} not found — stale pointer`,
       )
     } else if (scheduled.state.kind !== 'pending') {
-      console.warn(
+      log.warn(
         `[kick] actor ${args.actorId} scheduledId ${mailbox.drainScheduledId} in state '${scheduled.state.kind}' — skipping cancel`,
       )
     } else {
@@ -91,6 +71,7 @@ export async function kickMailbox(
       actorId: args.actorId,
       generation: mailbox.generation,
       executeFn: args.executeFn,
+      logLevel: args.logLevel,
     },
   )
   await ctx.db.patch(mailbox._id, {

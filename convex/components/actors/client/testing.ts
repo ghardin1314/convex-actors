@@ -13,6 +13,7 @@
  * shape.
  */
 import { createDraft, finishDraft } from "immer";
+import { createLogger } from "../logging.js";
 import { createProcessCtx, FailSentinel } from "./ctx.js";
 import type { ReplyPayload } from "./defineActor.js";
 import type {
@@ -105,6 +106,7 @@ export async function invokeHandler<
     selfDefinition: def,
     selfName: opts.selfName ?? "test",
     now,
+    logger: createLogger(),
     peekFn: async (actorType, name) => peekFn(actorType, name),
   });
 

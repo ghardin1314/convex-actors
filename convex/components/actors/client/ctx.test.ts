@@ -2,6 +2,7 @@ import { z } from "zod";
 import { describe, expect, test } from "vitest";
 
 import { createProcessCtx, FailSentinel } from "./ctx.js";
+import { createLogger } from "../logging.js";
 import type { Effect } from "../shared.js";
 import { defineActor, reply } from "./defineActor.js";
 
@@ -101,6 +102,7 @@ function makeCtx(
     selfDefinition: counter,
     selfName: "a",
     now: T0,
+    logger: createLogger(),
     peekFn: async () => null,
     ...overrides,
   });
@@ -250,6 +252,7 @@ describe("pushAsk / ActorStub.ask", () => {
       selfDefinition: saga,
       selfName: "saga-1",
       now: T0,
+      logger: createLogger(),
       peekFn: async () => null,
       ...overrides,
     });
@@ -298,6 +301,7 @@ describe("pushAsk / ActorStub.ask", () => {
       selfDefinition: simpleSaga,
       selfName: "s1",
       now: T0,
+      logger: createLogger(),
       peekFn: async () => null,
     });
     ctx.pushAsk(

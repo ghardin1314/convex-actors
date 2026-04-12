@@ -22,9 +22,11 @@ import type * as crons from "../crons.js";
 import type * as drain from "../drain.js";
 import type * as enqueue from "../enqueue.js";
 import type * as kick from "../kick.js";
+import type * as logging from "../logging.js";
 import type * as recovery from "../recovery.js";
 import type * as responses from "../responses.js";
 import type * as shared from "../shared.js";
+import type * as stats from "../stats.js";
 import type * as testHelpers from "../testHelpers.js";
 
 import type {
@@ -49,9 +51,11 @@ const fullApi: ApiFromModules<{
   drain: typeof drain;
   enqueue: typeof enqueue;
   kick: typeof kick;
+  logging: typeof logging;
   recovery: typeof recovery;
   responses: typeof responses;
   shared: typeof shared;
+  stats: typeof stats;
   testHelpers: typeof testHelpers;
 }> = anyApi as any;
 

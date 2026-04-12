@@ -11,6 +11,7 @@ import {
 } from 'convex/server'
 import type { z } from 'zod'
 import type { ComponentApi } from '../_generated/component'
+import type { LogLevel } from '../logging.js'
 import type {
   AnyProcess,
   MessageNamesOf,
@@ -36,18 +37,8 @@ export type RunMutationCtx = {
   ) => Promise<FunctionReturnType<Mutation>>
 }
 
-/**
- * Type alias for the `components.actors` reference that a
- * `ActorSystem` is constructed against. (The component directory is
- * still named `actors` for historical reasons — the registry inside it
- * now holds any `ProcessDefinition`.)
- */
 export type ActorsComponent = ComponentApi
 
-/**
- * Shape of the app-level `execute` internalMutation that
- * `ActorSystem` passes to the component via function handle.
- */
 export type ExecuteRef = FunctionReference<
   'mutation',
   'internal',
@@ -59,6 +50,10 @@ export type ExecuteRef = FunctionReference<
   }
 >
 
+export interface ActorSystemOptions {
+  logLevel?: LogLevel
+}
+
 export type RegisteredActorType<Defs extends Record<string, AnyProcess>> =
   Defs[keyof Defs]['type']
 
@@ -67,18 +62,20 @@ export type DefinitionByType<
   T extends RegisteredActorType<Defs>,
 > = Extract<Defs[keyof Defs], { type: T }>
 
-/**
- * Container that ties actor definitions to a component reference
- * and provides methods for interacting with them.
- */
 export class ActorSystem<Defs extends Record<string, AnyProcess>> {
   readonly component: ActorsComponent
   readonly definitions: Defs
+  readonly options: ActorSystemOptions
   private readonly byType: Map<string, AnyProcess>
 
-  constructor(component: ActorsComponent, definitions: Defs) {
+  constructor(
+    component: ActorsComponent,
+    definitions: Defs,
+    options?: ActorSystemOptions,
+  ) {
     this.component = component
     this.definitions = definitions
+    this.options = options ?? {}
 
     this.byType = new Map()
     for (const def of Object.values(definitions)) {
@@ -111,10 +108,6 @@ export class ActorSystem<Defs extends Record<string, AnyProcess>> {
     return this.byType.values()
   }
 
-  /**
-   * Send a typed message to an actor. The definition object provides
-   * compile-time checking of message name and payload shape.
-   */
   async send<D extends AnyProcess, M extends MessageNamesOf<D>>(
     ctx: RunMutationCtx,
     executeRef: ExecuteRef,
@@ -127,10 +120,6 @@ export class ActorSystem<Defs extends Record<string, AnyProcess>> {
     return this.sendRaw(ctx, executeRef, def.type, name, msgType, payload, opts)
   }
 
-  /**
-   * Read an actor's projected public view. Returns `null` when the
-   * actor doesn't exist or has no state yet.
-   */
   async peek<D extends AnyProcess>(
     ctx: RunQueryCtx,
     def: D,
@@ -139,11 +128,6 @@ export class ActorSystem<Defs extends Record<string, AnyProcess>> {
     return this.peekRaw(ctx, def.type, name) as Promise<ProjectionOf<D> | null>
   }
 
-  /**
-   * Untyped send for the Convex mutation boundary where actorType
-   * and msgType arrive as plain strings. Validates both at runtime
-   * plus the payload shape.
-   */
   async sendRaw(
     ctx: RunMutationCtx,
     executeRef: ExecuteRef,
@@ -172,7 +156,6 @@ export class ActorSystem<Defs extends Record<string, AnyProcess>> {
       )
     }
 
-    // Validate payload against the Zod schema
     const schema = def.messages[msgType].payload
     const parsed = schema.safeParse(payload)
     if (!parsed.success) {
@@ -189,14 +172,12 @@ export class ActorSystem<Defs extends Record<string, AnyProcess>> {
     const ids = await ctx.runMutation(this.component.enqueue.enqueueMessage, {
       effects: [{ actorType: actorType, name, msgType, payload, deliverAt }],
       executeFn,
+      logLevel: this.options.logLevel,
     })
 
     return ids[0]
   }
 
-  /**
-   * Untyped peek for the Convex query boundary.
-   */
   async peekRaw(
     ctx: RunQueryCtx,
     actorType: string,
@@ -221,13 +202,6 @@ export class ActorSystem<Defs extends Record<string, AnyProcess>> {
     return def.project(state)
   }
 
-  /**
-   * Look up the response for a given messageId. Returns `null` before
-   * the drain has committed a result.
-   *
-   * Optionally pass `<ActorDef, 'msgName'>` to narrow the success
-   * value to the handler's return type.
-   */
   async getResponse<
     D extends AnyProcess = AnyProcess,
     M extends MessageNamesOf<D> = MessageNamesOf<D>,

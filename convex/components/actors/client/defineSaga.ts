@@ -344,9 +344,11 @@ function startCompensation<Input, Context, StepNames extends string>(
       try {
         const compensateCtx = makeSagaCompensateCtx(internalCtx);
         step.compensate(state.input, contextSnapshot, compensateCtx);
-      } catch {
-        // Best-effort: continue compensating remaining steps even if one throws
-        // TODO: Log the error
+      } catch (e) {
+        internalCtx.logger.error(
+          `[saga] compensate for step "${name}" threw:`,
+          e instanceof Error ? e.message : String(e),
+        );
       }
     }
   }

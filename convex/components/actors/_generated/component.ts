@@ -58,6 +58,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             };
           }>;
           executeFn: string;
+          logLevel?: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
         },
         Array<string>,
         Name
