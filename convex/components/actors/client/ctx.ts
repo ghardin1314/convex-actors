@@ -36,6 +36,16 @@ export type ScheduleOpts =
   | { at: number; after?: never }
   | { after: number; at?: never };
 
+/** Resolve `{ at, after }` opts to an absolute timestamp, clamped to `now`. */
+export function resolveDeliverAt(
+  now: number,
+  opts: ScheduleOpts | undefined,
+): number {
+  if (opts?.at !== undefined) return Math.max(opts.at, now);
+  if (opts?.after !== undefined) return now + opts.after;
+  return now;
+}
+
 // Effect descriptors and ReplyTo live in `../shared.ts` so the
 // component runtime (`enqueue`, `drain`) and the client-side handler
 // ctx agree on a single shape. Import them from there directly.
@@ -162,12 +172,6 @@ export function createProcessCtx(
   const effects: Effect[] = [];
   const internals: ProcessCtxInternals = { effects, returnValue: undefined };
 
-  function resolveDeliverAt(opts: ScheduleOpts | undefined): number {
-    if (opts?.at !== undefined) return Math.max(opts.at, args.now);
-    if (opts?.after !== undefined) return args.now + opts.after;
-    return args.now;
-  }
-
   function makeBaseStub<D extends AnyProcess>(
     def: D,
     name: string,
@@ -191,7 +195,7 @@ export function createProcessCtx(
           name,
           msgType: String(msgType),
           payload: parsed.data,
-          deliverAt: resolveDeliverAt(opts),
+          deliverAt: resolveDeliverAt(args.now, opts),
         });
       },
       async peek() {
@@ -222,7 +226,7 @@ export function createProcessCtx(
         name: args.selfName,
         msgType,
         payload: parsed.data,
-        deliverAt: resolveDeliverAt(opts),
+        deliverAt: resolveDeliverAt(args.now, opts),
       });
     },
   };

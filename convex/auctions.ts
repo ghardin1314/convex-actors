@@ -1,5 +1,5 @@
 /**
- * App-owned API for the auction house demo. Phase 3 of DEMO.md.
+ * App-owned API for the auction house demo.
  *
  * The UI never talks to the actor framework directly — it goes through
  * the typed queries and mutations defined here.
@@ -8,16 +8,10 @@
  * endpoint that needs a caller identity.
  */
 import { v } from 'convex/values'
-import { mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
+import { mutation, query } from './_generated/server'
+import { account, auction, auctionHouse, bidSaga, userBids } from './actors'
 import { system } from './system'
-import {
-  account,
-  auction,
-  auctionHouse,
-  bidSaga,
-  userBids,
-} from './actors'
 
 // ── Validators ──────────────────────────────────────────────────
 
@@ -113,11 +107,6 @@ export const createAuction = mutation({
         'auctions.createAuction: startingPrice must be a non-negative number',
       )
     }
-    // The supervisor allocates the auction name and returns it as the
-    // reply. The client reads it via `useQuery(getResponse, { messageId })`,
-    // which pushes the value reactively when the drain commits.
-
-    // TODO: Add a nicer way to get message response w/auth, etc.
     return await system.send(
       ctx,
       internal.system.execute,
@@ -206,6 +195,7 @@ export const listUserBids = query({
 export const getResponse = query({
   args: { messageId: v.string() },
   handler: async (ctx, { messageId }) => {
+    // In production, we would add an auth check of some kind here to ensure user sent message or otherwise authorized to access the response.
     return await system.getResponse(ctx, { messageId })
   },
 })

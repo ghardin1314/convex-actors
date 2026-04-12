@@ -1,10 +1,9 @@
 /// <reference types="vite/client" />
 /**
- * Phase 3 API-layer tests: the typed `convex/auctions.ts` queries and
- * mutations that the UI will call. Verifies the wiring (auth gate,
- * validation, reactive response read) on top of the actor stack rather than
- * re-testing the supervisor / sagas / state machine — those are
- * exercised exhaustively by `auctionPhase2.test.ts`.
+ * API-layer tests: the typed `convex/auctions.ts` queries and mutations
+ * that the UI calls. Verifies wiring (auth gate, validation, reactive
+ * response read) on top of the actor stack — the supervisor / sagas /
+ * state machine are exercised by `auction.integration.test.ts`.
  */
 import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -209,8 +208,8 @@ describe('auctions.placeBid', () => {
 
     // The `start` message itself succeeds (saga handler ran cleanly);
     // the saga's failure shows up in the saga projection. The API
-    // intentionally doesn't bake a saga-status query — DEMO leaves
-    // that for the debug panel — so we can't peek `bidSaga` through
+    // intentionally doesn't bake a saga-status query into the public
+    // API — so we can't peek `bidSaga` through
     // `auctions.*`. Verify the side effect instead: the bidder's hold
     // was compensated, leaving the available balance untouched.
     const sagaResponse = await t.query(api.auctions.getResponse, {

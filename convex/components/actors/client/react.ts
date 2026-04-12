@@ -19,6 +19,7 @@ import type {
 import type {
   AnyProcess,
   MessageNamesOf,
+  ResponseEnvelope,
   ReturnOf,
 } from "./defineProcess";
 import type { SagaProjection } from "./defineSaga";
@@ -34,44 +35,16 @@ export type {
   SagaProjectionOf,
   StepNamesOf,
 } from "./defineSaga";
-
-/**
- * Shape of the `response` field in a committed message-response row.
- * Generic over the success `value` so a typed awaiter can narrow it
- * to the handler's declared return type.
- */
-export type ActorResponse<T = unknown> =
-  | { kind: "success"; value: T }
-  | { kind: "fail"; reason: string; details?: unknown }
-  | { kind: "defect"; error: string; attempts: number };
+export type { ActorResponse, ResponseEnvelope } from "./defineProcess";
 
 // ── Typed response awaiter ─────────────────────────────────────────
 
-/**
- * Shape of a public `getResponse` query wrapper. Each app exposes its
- * own wrapper around `system.getResponse`:
- *
- *   export const getResponse = query({
- *     args: { messageId: v.string() },
- *     handler: async (ctx, { messageId }) =>
- *       await system.getResponse(ctx, { messageId }),
- *   });
- *
- * Pass that reference to `createResponseAwaiter` to get a typed
- * awaiter bound to it.
- */
 export type GetResponseQueryRef = FunctionReference<
   "query",
   "public",
   { messageId: string },
-  { messageId: string; response: ActorResponse } | null
+  ResponseEnvelope | null
 >;
-
-/** Envelope returned by an awaiter, with the success value narrowed. */
-export type TypedResponseEnvelope<T> = {
-  messageId: string;
-  response: ActorResponse<T>;
-};
 
 /**
  * Bind a public `getResponse` query wrapper into an imperative
@@ -113,7 +86,7 @@ export function createResponseAwaiter(getResponseQuery: GetResponseQueryRef) {
   >(
     convex: ConvexReactClient,
     messageId: string,
-  ): Promise<TypedResponseEnvelope<ReturnOf<D, M>>> => {
+  ): Promise<ResponseEnvelope<ReturnOf<D, M>>> => {
     return new Promise((resolve, reject) => {
       const watch = convex.watchQuery(getResponseQuery, { messageId });
       let unsubscribe: (() => void) | null = null;
@@ -122,7 +95,7 @@ export function createResponseAwaiter(getResponseQuery: GetResponseQueryRef) {
           const value = watch.localQueryResult();
           if (value !== null && value !== undefined) {
             unsubscribe?.();
-            resolve(value as TypedResponseEnvelope<ReturnOf<D, M>>);
+            resolve(value as ResponseEnvelope<ReturnOf<D, M>>);
           }
         } catch (err) {
           unsubscribe?.();

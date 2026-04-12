@@ -55,12 +55,11 @@ describe('kickMailbox', () => {
       await kickMailbox(ctx, { actorId: actor._id, deliverAt, executeFn })
 
       const after = (await getMailboxRow(ctx, actor._id))!
-      // Kick is not allowed to touch generation — that's the drain's
-      // job. See SPEC §Drain generation and recovery.
+      // Kick is not allowed to touch generation — that's the drain's job.
       expect(after.generation).toBe(0)
       assert(after.drainKind === 'scheduled')
       expect(after.drainAt).toBe(deliverAt)
-      // executeFn persisted for recovery (Phase 5)
+      // executeFn persisted for crash recovery
       expect(after.executeFn).toBe(executeFn)
 
       const scheduled = await ctx.db.system.get(after.drainScheduledId!)
@@ -121,11 +120,9 @@ describe('kickMailbox', () => {
   })
 
   test('bring-forward within KICK_EPSILON_MS is a no-op', async () => {
-    // Mirrors workpool's "scheduled to run soon enough" guard,
-    // generalized to "close to requested deliverAt". An improvement
-    // delta strictly smaller than the epsilon is not worth the
-    // cancel churn. We derive all timing from KICK_EPSILON_MS so this
-    // test tracks the constant instead of baking in "800ms".
+    // An improvement delta smaller than the epsilon is not worth the
+    // cancel churn. Timing derived from KICK_EPSILON_MS so this test
+    // tracks the constant.
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle()
@@ -202,9 +199,8 @@ describe('kickMailbox', () => {
   })
 
   test('deliverAt far in the past is clamped to now', async () => {
-    // boundScheduledTime mirror of workpool's clamp: anything
-    // absurdly old becomes "run ASAP". We don't want a kick with a
-    // bogus timestamp to confuse follow-up no-op comparisons.
+    // boundScheduledTime clamps absurdly old timestamps to now so a
+    // bogus deliverAt doesn't confuse follow-up no-op comparisons.
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle()

@@ -1,6 +1,5 @@
 /**
- * `auctionHouse` — singleton supervisor/registry actor. Phase 2 of the
- * auction demo.
+ * `auctionHouse` — singleton supervisor/registry actor.
  *
  * Centralises auction creation (allocates stable names, stubs out the
  * new auction actor, tracks it in its own registry) and maintains a

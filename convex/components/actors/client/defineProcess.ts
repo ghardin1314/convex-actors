@@ -79,3 +79,14 @@ export type ReturnOf<
 > = D["messages"][M]["response"] extends z.ZodTypeAny
   ? z.infer<D["messages"][M]["response"]>
   : unknown;
+
+/** Response envelope, generic over the success value. */
+export type ActorResponse<T = unknown> =
+  | { kind: "success"; value: T }
+  | { kind: "fail"; reason: string; details?: unknown }
+  | { kind: "defect"; error: string; attempts: number };
+
+export type ResponseEnvelope<T = unknown> = {
+  messageId: string;
+  response: ActorResponse<T>;
+};

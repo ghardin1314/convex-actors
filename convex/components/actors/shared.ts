@@ -1,68 +1,45 @@
-import type { Infer } from "convex/values";
-import { v } from "convex/values";
+import type { Infer } from 'convex/values'
+import { v } from 'convex/values'
 
 // -------- Time --------
 
-export const SECOND = 1000;
-export const MINUTE = 60 * SECOND;
-export const HOUR = 60 * MINUTE;
-export const DAY = 24 * HOUR;
+export const SECOND = 1000
+export const MINUTE = 60 * SECOND
+export const HOUR = 60 * MINUTE
+export const DAY = 24 * HOUR
 
-/**
- * Wall-clock reader. Centralized so tests can stub it if ever needed,
- * though `vi.useFakeTimers()` + `vi.setSystemTime()` covers the current
- * test strategy without a seam.
- */
+/** Wall-clock reader. Centralized so tests can stub it if needed. */
 export function now(): number {
-  return Date.now();
+  return Date.now()
 }
 
-// -------- Tunables (SPEC §Drain generation and recovery, §Three outcomes) --------
+// -------- Tunables --------
+// TODO: Make externally configurable
 
 /** A `running` mailbox older than this is considered crashed. */
-export const RECOVERY_THRESHOLD_MS = 5 * MINUTE;
+export const RECOVERY_THRESHOLD_MS = 5 * MINUTE
 /** How often the recovery cron fires. */
-export const RECOVERY_PERIOD_MS = 5 * MINUTE;
+export const RECOVERY_PERIOD_MS = 5 * MINUTE
 /** Total handler attempts before a throw becomes a `defect`. */
-export const MAX_ATTEMPTS = 3;
+export const MAX_ATTEMPTS = 3
 
 /**
- * Kick bring-forward epsilon. If an existing schedule fires within
- * this window of the new requested `deliverAt`, kick treats it as a
- * no-op rather than paying the cancel + reschedule cost for a
- * sub-second latency win. Mirrors workpool's `SECOND` threshold in
- * `kick.ts`, generalized from "close to now" to "close to the
- * requested deliverAt" so it also applies to kicks targeting far-future
- * messages.
+ * If an existing schedule fires within this window of the requested
+ * `deliverAt`, kick skips the cancel + reschedule for a sub-second win.
  */
-export const KICK_EPSILON_MS = 1 * SECOND;
+export const KICK_EPSILON_MS = 1 * SECOND
 
 /**
- * Hard guard rails for scheduled timestamps. Mirrors workpool's
- * `boundScheduledTime`: anything wildly in the past is clamped to
- * `now` (treat as "run ASAP") and anything absurdly far in the future
- * is clamped to one year out. Kicks in the past normally come from
- * clock skew or a test that forgot to clamp `deliverAt`; kicks in the
- * distant future are almost always a bug.
+ * Clamps scheduled timestamps: anything >1yr in the past → now,
+ * anything >4yr in the future → 1yr out.
  */
-export const YEAR = 365 * DAY;
+export const YEAR = 365 * DAY
 export function boundScheduledTime(ms: number): number {
-  const t = now();
-  if (ms < t - YEAR) return t;
-  if (ms > t + 4 * YEAR) return t + YEAR;
-  return ms;
+  const t = now()
+  if (ms < t - YEAR) return t
+  if (ms > t + 4 * YEAR) return t + YEAR
+  return ms
 }
-
-/** Default retention windows per response kind. `undefined` = keep forever. */
-export const RESPONSE_TTL_MS: {
-  success: number;
-  fail: number;
-  defect: number | undefined;
-} = {
-  success: 1 * HOUR,
-  fail: 1 * HOUR,
-  defect: undefined,
-};
 
 // -------- Reply routing --------
 
@@ -76,7 +53,7 @@ export const vReplyTo = v.object({
   name: v.string(),
   handler: v.string(),
   context: v.any(),
-});
+})
 
 // -------- Effects --------
 
@@ -86,11 +63,11 @@ export const vReplyTo = v.object({
  * would infer to.
  */
 export type ReplyTo = {
-  actorType: string;
-  name: string;
-  handler: string;
-  context: unknown;
-};
+  actorType: string
+  name: string
+  handler: string
+  context: unknown
+}
 
 /**
  * One message effect produced by a handler. Shared shape for both the
@@ -101,13 +78,13 @@ export type ReplyTo = {
  * `payload` can stay `unknown`.
  */
 export type Effect = {
-  actorType: string;
-  name: string;
-  msgType: string;
-  payload: unknown;
-  deliverAt: number;
-  replyTo?: ReplyTo;
-};
+  actorType: string
+  name: string
+  msgType: string
+  payload: unknown
+  deliverAt: number
+  replyTo?: ReplyTo
+}
 
 /**
  * Return shape of the app-level `execute` mutation. The producer
@@ -120,13 +97,13 @@ export type Effect = {
  */
 export type ExecuteOutcome =
   | {
-      outcome: "success";
-      newState: unknown;
-      effects: Effect[];
-      response: unknown;
+      outcome: 'success'
+      newState: unknown
+      effects: Effect[]
+      response: unknown
     }
-  | { outcome: "fail"; reason: string; details?: unknown }
-  | { outcome: "defect"; error: string };
+  | { outcome: 'fail'; reason: string; details?: unknown }
+  | { outcome: 'defect'; error: string }
 
 // -------- Validators --------
 
@@ -137,33 +114,33 @@ export type ExecuteOutcome =
 export const vAddress = v.object({
   actorType: v.string(),
   name: v.string(),
-});
-export type Address = Infer<typeof vAddress>;
+})
+export type Address = Infer<typeof vAddress>
 
 /** Possible drain-loop states for a mailbox. */
 export const vDrainKind = v.union(
-  v.literal("idle"),
-  v.literal("scheduled"),
-  v.literal("running"),
-);
-export type DrainKind = Infer<typeof vDrainKind>;
+  v.literal('idle'),
+  v.literal('scheduled'),
+  v.literal('running'),
+)
+export type DrainKind = Infer<typeof vDrainKind>
 
 /**
- * The three possible outcomes of processing a message. See SPEC §Three
- * outcomes. `defect.attempts` is the attempt count at which the handler
- * gave up (always `MAX_ATTEMPTS` today, but stored for observability).
+ * The three possible outcomes of processing a message: success, fail
+ * (domain-level rejection), or defect (handler threw after all retries).
+ * `defect.attempts` is the attempt count at which the handler gave up.
  */
 export const vResponse = v.union(
-  v.object({ kind: v.literal("success"), value: v.any() }),
+  v.object({ kind: v.literal('success'), value: v.any() }),
   v.object({
-    kind: v.literal("fail"),
+    kind: v.literal('fail'),
     reason: v.string(),
     details: v.optional(v.any()),
   }),
   v.object({
-    kind: v.literal("defect"),
+    kind: v.literal('defect'),
     error: v.string(),
     attempts: v.number(),
   }),
-);
-export type Response = Infer<typeof vResponse>;
+)
+export type Response = Infer<typeof vResponse>

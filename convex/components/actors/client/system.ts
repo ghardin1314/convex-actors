@@ -1,9 +1,7 @@
 /**
- * `ActorSystem` — typed registry + dispatch facade for a set of
- * actor definitions (sagas count as actors here — they share the
- * same registration and dispatch path). Follows the workpool
- * pattern: methods take `ctx` (RunMutationCtx / RunQueryCtx) and
- * call component mutations/queries directly.
+ * `ActorSystem` — typed registry + dispatch facade for a set of actor
+ * definitions. Methods take `ctx` and call component mutations/queries
+ * directly.
  */
 import {
   createFunctionHandle,
@@ -13,8 +11,14 @@ import {
 } from 'convex/server'
 import type { z } from 'zod'
 import type { ComponentApi } from '../_generated/component'
-import type { AnyProcess, MessageNamesOf, ProjectionOf } from './defineProcess'
-import type { ScheduleOpts } from './ctx'
+import type {
+  AnyProcess,
+  MessageNamesOf,
+  ProjectionOf,
+  ResponseEnvelope,
+  ReturnOf,
+} from './defineProcess'
+import { resolveDeliverAt, type ScheduleOpts } from './ctx'
 
 export type RunQueryCtx = {
   runQuery: <Query extends FunctionReference<'query', 'public' | 'internal'>>(
@@ -178,16 +182,7 @@ export class ActorSystem<Defs extends Record<string, AnyProcess>> {
     }
     payload = parsed.data
 
-    const now = Date.now()
-    let deliverAt: number
-    if (opts?.at !== undefined) {
-      deliverAt = opts.at
-    } else if (opts?.after !== undefined) {
-      deliverAt = now + opts.after
-    } else {
-      deliverAt = now
-    }
-    if (deliverAt < now) deliverAt = now
+    const deliverAt = resolveDeliverAt(Date.now(), opts)
 
     const executeFn = await createFunctionHandle(executeRef)
 
@@ -229,19 +224,19 @@ export class ActorSystem<Defs extends Record<string, AnyProcess>> {
   /**
    * Look up the response for a given messageId. Returns `null` before
    * the drain has committed a result.
+   *
+   * Optionally pass `<ActorDef, 'msgName'>` to narrow the success
+   * value to the handler's return type.
    */
-  async getResponse(
+  async getResponse<
+    D extends AnyProcess = AnyProcess,
+    M extends MessageNamesOf<D> = MessageNamesOf<D>,
+  >(
     ctx: RunQueryCtx,
     args: { messageId: string },
-  ): Promise<{
-    messageId: string
-    response:
-      | { kind: 'success'; value: unknown }
-      | { kind: 'fail'; reason: string; details?: unknown }
-      | { kind: 'defect'; error: string; attempts: number }
-  } | null> {
+  ): Promise<ResponseEnvelope<ReturnOf<D, M>> | null> {
     return await ctx.runQuery(this.component.responses.getResponseRow, {
       messageId: args.messageId,
-    })
+    }) as ResponseEnvelope<ReturnOf<D, M>> | null
   }
 }

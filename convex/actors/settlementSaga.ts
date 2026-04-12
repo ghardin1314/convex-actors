@@ -4,9 +4,9 @@
  * auction. Compensation refunds the winner and sends `settlementFailed`
  * to the auction.
  *
- * Note on the `begin` sync marker step (not in DEMO.md's pseudocode):
+ * Note on the `begin` sync marker step:
  *
- * DEMO.md specifies that the auction should be notified via
+ * The auction should be notified via
  * `settlementFailed` on *any* saga failure — including when the very
  * first ask (`settleWinnerHold`) fails. The saga framework walks back
  * through `completedSteps`, so if the first ask fails there's nothing

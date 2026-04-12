@@ -18,6 +18,8 @@ export type {
   ProjectionOf,
   MessageNamesOf,
   ReturnOf,
+  ActorResponse,
+  ResponseEnvelope,
 } from "./defineProcess";
 
 // ── Actor API ───────────────────────────────────────────────────
@@ -72,6 +74,6 @@ export type {
 export { makeExecute } from "./execute";
 
 // ── Error + effect types (useful in tests + diagnostics) ────────
-export { FailSentinel } from "./ctx";
+export { FailSentinel, resolveDeliverAt } from "./ctx";
 export type { ScheduleOpts } from "./ctx";
 export type { Effect, ReplyTo } from "../shared.js";

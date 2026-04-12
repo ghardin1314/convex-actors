@@ -5,7 +5,7 @@
  * scheduling) and returns the new drain state.
  *
  * Mailbox state is read once at the top, mutated in-memory, and
- * written once at the end (same pattern as the workpool's `state`).
+ * written once at the end.
  */
 import { v } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
@@ -141,11 +141,8 @@ export const drainLoop = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    // TODO: mailboxState serves both as internal loop bookkeeping
-    // (generation, drain) and external observable status (getMailboxInfo).
-    // Workpool separates these into internalState vs runStatus to avoid
-    // OCC conflicts between the loop and status readers. Consider
-    // splitting if status polls cause contention.
+    // TODO: consider splitting mailboxState into internal bookkeeping
+    // vs observable status to avoid OCC conflicts with status readers.
 
     // ── Read mailbox once ───────────────────────────────────
     const mailbox = await getMailboxRow(ctx, args.actorId);

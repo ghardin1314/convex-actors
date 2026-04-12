@@ -14,8 +14,6 @@
  * are intentional — the bindings are only ever read inside handler
  * bodies, so ESM live-bindings resolve at invocation time rather than
  * module evaluation time.
- *
- * See DEMO.md for the full design.
  */
 import { z } from 'zod'
 import { defineActor } from '../components/actors/client'

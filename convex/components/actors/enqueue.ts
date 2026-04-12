@@ -9,7 +9,7 @@ import { now, vReplyTo, type Effect } from './shared.js'
  * Single effect to apply: a message targeted at one `(actorType, name)`
  * address. The `enqueueMessage` mutation accepts an array of these so
  * both the top-level `send` path and the drain's effect-list application
- * can share the same insert code path (SPEC §Per-actor drain loop).
+ * can share the same insert code path.
  */
 export const vEffect = v.object({
   actorType: v.string(),
@@ -36,11 +36,8 @@ const vEnqueueArgs = {
  * Lazy-creates the target actor + paired mailbox rows on first contact
  * via `getOrCreateActorRow`.
  *
- * Does **not** kick any mailbox — scheduling the drain is the caller's
- * responsibility. Splitting enqueue from kick keeps the two halves of
- * the send path independently testable and lets the drain's
- * effect-application path apply effects atomically before it issues its
- * own follow-up kicks.
+ * After inserting all rows, kicks each distinct target mailbox at the
+ * earliest `deliverAt` in the batch.
  *
  * `sendSeq` is assigned as the index within the `effects` array so that
  * multiple sends emitted from the same transaction processed at the
