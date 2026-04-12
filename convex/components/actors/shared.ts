@@ -16,7 +16,7 @@ export function now(): number {
 // -------- Tunables --------
 // TODO: Make externally configurable
 
-/** A `running` mailbox older than this is considered crashed. */
+/** A `running` drain older than this is considered crashed. */
 export const RECOVERY_THRESHOLD_MS = 5 * MINUTE
 /** How often the recovery cron fires. */
 export const RECOVERY_PERIOD_MS = 5 * MINUTE
@@ -117,7 +117,7 @@ export const vAddress = v.object({
 })
 export type Address = Infer<typeof vAddress>
 
-/** Possible drain-loop states for a mailbox. */
+/** Possible drain-loop states. */
 export const vDrainKind = v.union(
   v.literal('idle'),
   v.literal('scheduled'),

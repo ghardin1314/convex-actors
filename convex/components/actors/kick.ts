@@ -1,8 +1,8 @@
 import type { FunctionHandle } from 'convex/server'
-import type { Id } from './_generated/dataModel.js'
+import type { Doc, Id } from './_generated/dataModel.js'
 import { internal } from './_generated/api.js'
 import type { MutationCtx } from './_generated/server.js'
-import { getMailboxRow } from './actors.js'
+import { getBookkeepingRow, getSignalRow } from './actors.js'
 import { createLogger, type LogLevel, type Logger } from './logging.js'
 import {
   KICK_EPSILON_MS,
@@ -22,6 +22,18 @@ export type ExecuteFnHandle = FunctionHandle<
   ExecuteOutcome
 >
 
+function requireBookkeeping(
+  actorId: Id<'actor'>,
+  row: Doc<'drainBookkeeping'> | null,
+): Doc<'drainBookkeeping'> {
+  if (!row) {
+    throw new Error(
+      `actor ${actorId} has no drainBookkeeping row — invariant violated`,
+    )
+  }
+  return row
+}
+
 export async function kickMailbox(
   ctx: MutationCtx,
   args: {
@@ -33,34 +45,38 @@ export async function kickMailbox(
   logger?: Logger,
 ): Promise<void> {
   const log = logger ?? createLogger()
-  const mailbox = await getMailboxRow(ctx, args.actorId)
-  if (mailbox === null) {
+  const signal = await getSignalRow(ctx, args.actorId)
+  if (signal === null) {
     throw new Error(
-      `actor ${args.actorId} has no mailboxState row — invariant violated`,
+      `actor ${args.actorId} has no drainSignal row — invariant violated`,
     )
   }
 
-  if (mailbox.drainKind === 'running') {
+  if (signal.drainKind === 'running') {
     return
   }
 
   const deliverAt = boundScheduledTime(args.deliverAt)
+  const bookkeeping = requireBookkeeping(
+    args.actorId,
+    await getBookkeepingRow(ctx, args.actorId),
+  )
 
-  if (mailbox.drainKind === 'scheduled') {
-    if (mailbox.drainAt! <= deliverAt + KICK_EPSILON_MS) {
+  if (signal.drainKind === 'scheduled') {
+    if (bookkeeping.drainAt! <= deliverAt + KICK_EPSILON_MS) {
       return
     }
-    const scheduled = await ctx.db.system.get(mailbox.drainScheduledId!)
+    const scheduled = await ctx.db.system.get(bookkeeping.drainScheduledId!)
     if (scheduled === null) {
       log.warn(
-        `[kick] actor ${args.actorId} scheduledId ${mailbox.drainScheduledId} not found — stale pointer`,
+        `[kick] actor ${args.actorId} scheduledId ${bookkeeping.drainScheduledId} not found — stale pointer`,
       )
     } else if (scheduled.state.kind !== 'pending') {
       log.warn(
-        `[kick] actor ${args.actorId} scheduledId ${mailbox.drainScheduledId} in state '${scheduled.state.kind}' — skipping cancel`,
+        `[kick] actor ${args.actorId} scheduledId ${bookkeeping.drainScheduledId} in state '${scheduled.state.kind}' — skipping cancel`,
       )
     } else {
-      await ctx.scheduler.cancel(mailbox.drainScheduledId!)
+      await ctx.scheduler.cancel(bookkeeping.drainScheduledId!)
     }
   }
 
@@ -69,13 +85,15 @@ export async function kickMailbox(
     internal.drain.drainLoop,
     {
       actorId: args.actorId,
-      generation: mailbox.generation,
+      generation: signal.generation,
       executeFn: args.executeFn,
       logLevel: args.logLevel,
     },
   )
-  await ctx.db.patch(mailbox._id, {
+  await ctx.db.patch(signal._id, {
     drainKind: 'scheduled',
+  })
+  await ctx.db.patch(bookkeeping._id, {
     drainScheduledId: scheduledId,
     drainAt: deliverAt,
     drainStartedAt: undefined,

@@ -4,7 +4,8 @@ import { createFunctionHandle } from "convex/server";
 import { describe, expect, test } from "vitest";
 import {
   getActorRow,
-  getMailboxRow,
+  getSignalRow,
+  getBookkeepingRow,
   getOrCreateActorRow,
 } from "./actors.js";
 import { api } from "./_generated/api.js";
@@ -29,11 +30,11 @@ describe("getActorRow", () => {
 });
 
 describe("getOrCreateActorRow", () => {
-  test("lazy-creates actor + paired mailbox on first call", async () => {
+  test("lazy-creates actor + paired signal and bookkeeping on first call", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { actor, mailbox } = await getOrCreateActorRow(ctx, {
+      const { actor, signal } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
@@ -42,19 +43,25 @@ describe("getOrCreateActorRow", () => {
       expect(actor.actorType).toBe("counter");
       expect(actor.name).toBe("a");
 
-      expect(mailbox.actorId).toBe(actor._id);
-      expect(mailbox.generation).toBe(0);
-      expect(mailbox.drainKind).toBe("idle");
+      expect(signal.actorId).toBe(actor._id);
+      expect(signal.generation).toBe(0);
+      expect(signal.drainKind).toBe("idle");
 
-      // Exactly one row of each.
+      const bk = await getBookkeepingRow(ctx, actor._id);
+      expect(bk).not.toBeNull();
+      expect(bk!.actorId).toBe(actor._id);
+      expect(bk!.executeFn).toBe(executeFn);
+
       const actorRows = await ctx.db.query("actor").collect();
-      const mailboxRows = await ctx.db.query("mailboxState").collect();
+      const signalRows = await ctx.db.query("drainSignal").collect();
+      const bkRows = await ctx.db.query("drainBookkeeping").collect();
       expect(actorRows).toHaveLength(1);
-      expect(mailboxRows).toHaveLength(1);
+      expect(signalRows).toHaveLength(1);
+      expect(bkRows).toHaveLength(1);
     });
   });
 
-  test("is idempotent: second call returns existing rows without touching state", async () => {
+  test("is idempotent: second call returns existing rows", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
@@ -63,7 +70,6 @@ describe("getOrCreateActorRow", () => {
         name: "a",
         executeFn,
       });
-      // Simulate the drain loop populating state after first creation.
       await ctx.db.insert("actorState", { actorId: first.actor._id, state: { n: 42 } });
 
       const second = await getOrCreateActorRow(ctx, {
@@ -73,15 +79,15 @@ describe("getOrCreateActorRow", () => {
       });
 
       expect(second.actor._id).toBe(first.actor._id);
-      expect(second.mailbox._id).toBe(first.mailbox._id);
+      expect(second.signal._id).toBe(first.signal._id);
 
-      // Still exactly one pair.
       expect(await ctx.db.query("actor").collect()).toHaveLength(1);
-      expect(await ctx.db.query("mailboxState").collect()).toHaveLength(1);
+      expect(await ctx.db.query("drainSignal").collect()).toHaveLength(1);
+      expect(await ctx.db.query("drainBookkeeping").collect()).toHaveLength(1);
     });
   });
 
-  test("distinct (type, name) tuples get distinct actors and mailboxes", async () => {
+  test("distinct (type, name) tuples get distinct actors", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
@@ -104,14 +110,9 @@ describe("getOrCreateActorRow", () => {
       const ids = new Set([a.actor._id, b.actor._id, c.actor._id]);
       expect(ids.size).toBe(3);
 
-      const mailboxIds = new Set([
-        a.mailbox._id,
-        b.mailbox._id,
-        c.mailbox._id,
-      ]);
-      expect(mailboxIds.size).toBe(3);
+      const signalIds = new Set([a.signal._id, b.signal._id, c.signal._id]);
+      expect(signalIds.size).toBe(3);
 
-      // getActorRow can find each back by address.
       expect((await getActorRow(ctx, "counter", "a"))?._id).toBe(a.actor._id);
       expect((await getActorRow(ctx, "counter", "b"))?._id).toBe(b.actor._id);
       expect((await getActorRow(ctx, "ping", "a"))?._id).toBe(c.actor._id);
@@ -119,19 +120,21 @@ describe("getOrCreateActorRow", () => {
   });
 });
 
-describe("getMailboxRow", () => {
-  test("finds the paired mailbox for an actor", async () => {
+describe("getSignalRow / getBookkeepingRow", () => {
+  test("finds the paired rows for an actor", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { actor, mailbox } = await getOrCreateActorRow(ctx, {
+      const { actor, signal } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
-      const found = await getMailboxRow(ctx, actor._id);
-      expect(found?._id).toBe(mailbox._id);
+      const foundSignal = await getSignalRow(ctx, actor._id);
+      expect(foundSignal?._id).toBe(signal._id);
+      const foundBk = await getBookkeepingRow(ctx, actor._id);
+      expect(foundBk).not.toBeNull();
+      expect(foundBk!.actorId).toBe(actor._id);
     });
   });
 });
-

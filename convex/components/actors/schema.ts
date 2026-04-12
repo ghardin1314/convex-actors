@@ -14,26 +14,21 @@ export default defineSchema({
     state: v.any(),
   }).index('by_actor', ['actorId']),
 
-  mailboxState: defineTable({
+  drainSignal: defineTable({
     actorId: v.id('actor'),
-    // Bumped by every kick and by recovery. Drain bails if its arg no
-    // longer matches, so stale drains become no-ops.
     generation: v.number(),
-    // Drain-loop state machine (flat for indexability).
-    //   idle:      drainKind only; other drain fields absent.
-    //   scheduled: drainScheduledId + drainAt populated.
-    //   running:   drainStartedAt populated.
     drainKind: vDrainKind,
-    drainScheduledId: v.optional(v.id('_scheduled_functions')),
-    drainAt: v.optional(v.number()),
-    drainStartedAt: v.optional(v.number()),
-    // App-level execute function handle, stored so recovery can
-    // reschedule the drain loop without an app-side caller.
-    // Optional: absent until the first kickMailbox call.
-    executeFn: v.string(),
   })
     .index('by_actor', ['actorId'])
     .index('by_drainKind', ['drainKind']),
+
+  drainBookkeeping: defineTable({
+    actorId: v.id('actor'),
+    drainScheduledId: v.optional(v.id('_scheduled_functions')),
+    drainAt: v.optional(v.number()),
+    drainStartedAt: v.optional(v.number()),
+    executeFn: v.string(),
+  }).index('by_actor', ['actorId']),
 
   messages: defineTable({
     actorId: v.id('actor'),

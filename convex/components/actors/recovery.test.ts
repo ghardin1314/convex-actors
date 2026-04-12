@@ -10,7 +10,7 @@ import {
   test,
   vi,
 } from "vitest";
-import { getOrCreateActorRow, getMailboxRow } from "./actors.js";
+import { getOrCreateActorRow, getSignalRow, getBookkeepingRow } from "./actors.js";
 import { api, internal } from "./_generated/api.js";
 import schema from "./schema.js";
 import { RECOVERY_THRESHOLD_MS } from "./shared.js";
@@ -35,10 +35,10 @@ async function makeExecuteHandle() {
 }
 
 describe("listStuckMailboxes", () => {
-  test("no mailboxes → empty", async () => {
+  test("no rows → empty", async () => {
     const t = convexTest(schema, modules);
     const result = await t.run(async (ctx) => {
-      return await ctx.db.query("mailboxState").collect();
+      return await ctx.db.query("drainSignal").collect();
     });
     expect(result).toHaveLength(0);
 
@@ -50,13 +50,16 @@ describe("listStuckMailboxes", () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { mailbox } = await getOrCreateActorRow(ctx, {
+      const { signal } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
-      await ctx.db.patch(mailbox._id, {
+      const bk = (await getBookkeepingRow(ctx, signal.actorId))!;
+      await ctx.db.patch(signal._id, {
         drainKind: "running",
+      });
+      await ctx.db.patch(bk._id, {
         drainStartedAt: T0,
       });
     });
@@ -69,13 +72,16 @@ describe("listStuckMailboxes", () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { mailbox } = await getOrCreateActorRow(ctx, {
+      const { signal } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
-      await ctx.db.patch(mailbox._id, {
+      const bk = (await getBookkeepingRow(ctx, signal.actorId))!;
+      await ctx.db.patch(signal._id, {
         drainKind: "running",
+      });
+      await ctx.db.patch(bk._id, {
         drainStartedAt: T0 - RECOVERY_THRESHOLD_MS - 1,
       });
     });
@@ -91,19 +97,22 @@ describe("listStuckMailboxes", () => {
       // idle
       await getOrCreateActorRow(ctx, { actorType: "counter", name: "a", executeFn });
       // scheduled
-      const { mailbox } = await getOrCreateActorRow(ctx, {
+      const { actor, signal } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "b",
         executeFn,
       });
+      const bk = (await getBookkeepingRow(ctx, actor._id))!;
       const scheduledId = await ctx.scheduler.runAt(
         T0 + 5000,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         executeFn as any,
-        { actorId: mailbox.actorId, generation: 0, executeFn },
+        { actorId: actor._id, generation: 0, executeFn },
       );
-      await ctx.db.patch(mailbox._id, {
+      await ctx.db.patch(signal._id, {
         drainKind: "scheduled",
+      });
+      await ctx.db.patch(bk._id, {
         drainScheduledId: scheduledId,
         drainAt: T0 + 5000,
       });
@@ -119,13 +128,16 @@ describe("recoverMailbox", () => {
     const t = convexTest(schema, modules);
     const actorId = await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { actor, mailbox } = await getOrCreateActorRow(ctx, {
+      const { actor, signal } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
-      await ctx.db.patch(mailbox._id, {
+      const bk = (await getBookkeepingRow(ctx, actor._id))!;
+      await ctx.db.patch(signal._id, {
         drainKind: "running",
+      });
+      await ctx.db.patch(bk._id, {
         drainStartedAt: T0 - RECOVERY_THRESHOLD_MS - 1,
         executeFn,
       });
@@ -135,9 +147,10 @@ describe("recoverMailbox", () => {
     await t.mutation(internal.recovery.recoverMailbox, { actorId });
 
     await t.run(async (ctx) => {
-      const mailbox = (await getMailboxRow(ctx, actorId))!;
-      assert(mailbox.drainKind === "scheduled");
-      expect(mailbox.drainAt).toBe(T0);
+      const signal = (await getSignalRow(ctx, actorId))!;
+      const bk = (await getBookkeepingRow(ctx, actorId))!;
+      assert(signal.drainKind === "scheduled");
+      expect(bk.drainAt).toBe(T0);
     });
   });
 
@@ -145,13 +158,16 @@ describe("recoverMailbox", () => {
     const t = convexTest(schema, modules);
     const actorId = await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { actor, mailbox } = await getOrCreateActorRow(ctx, {
+      const { actor, signal } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
-      await ctx.db.patch(mailbox._id, {
+      const bk = (await getBookkeepingRow(ctx, actor._id))!;
+      await ctx.db.patch(signal._id, {
         drainKind: "running",
+      });
+      await ctx.db.patch(bk._id, {
         drainStartedAt: T0,
         executeFn,
       });
@@ -161,13 +177,12 @@ describe("recoverMailbox", () => {
     await t.mutation(internal.recovery.recoverMailbox, { actorId });
 
     await t.run(async (ctx) => {
-      const mailbox = (await getMailboxRow(ctx, actorId))!;
-      // Still running — not recovered
-      expect(mailbox.drainKind).toBe("running");
+      const signal = (await getSignalRow(ctx, actorId))!;
+      expect(signal.drainKind).toBe("running");
     });
   });
 
-  test("idle mailbox → no-op", async () => {
+  test("idle drain → no-op", async () => {
     const t = convexTest(schema, modules);
     const actorId = await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
@@ -182,8 +197,8 @@ describe("recoverMailbox", () => {
     await t.mutation(internal.recovery.recoverMailbox, { actorId });
 
     await t.run(async (ctx) => {
-      const mailbox = (await getMailboxRow(ctx, actorId))!;
-      expect(mailbox.drainKind).toBe("idle");
+      const signal = (await getSignalRow(ctx, actorId))!;
+      expect(signal.drainKind).toBe("idle");
     });
   });
 
@@ -191,45 +206,39 @@ describe("recoverMailbox", () => {
     const t = convexTest(schema, modules);
     const actorId = await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { actor, mailbox } = await getOrCreateActorRow(ctx, {
+      const { actor, signal } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
-      await ctx.db.patch(mailbox._id, {
+      const bk = (await getBookkeepingRow(ctx, actor._id))!;
+      await ctx.db.patch(signal._id, {
         generation: 5,
         drainKind: "running",
+      });
+      await ctx.db.patch(bk._id, {
         drainStartedAt: T0 - RECOVERY_THRESHOLD_MS - 1,
         executeFn,
       });
       return actor._id;
     });
 
-    // Both recovery and a simulated drain-finish run concurrently.
-    // In convex-test each t.run/t.mutation is its own transaction.
-    // We run both; whichever sees the running state first wins,
-    // the other sees a different drain.kind and no-ops.
     await Promise.all([
       t.mutation(internal.recovery.recoverMailbox, { actorId }),
-      // Simulate a drain finishing: transition running → idle
       t.run(async (ctx) => {
-        const mailbox = (await getMailboxRow(ctx, actorId))!;
-        if (mailbox.drainKind === "running") {
-          await ctx.db.patch(mailbox._id, {
-            generation: mailbox.generation + 1,
+        const signal = (await getSignalRow(ctx, actorId))!;
+        if (signal.drainKind === "running") {
+          await ctx.db.patch(signal._id, {
+            generation: signal.generation + 1,
             drainKind: "idle",
-            drainStartedAt: undefined,
           });
         }
       }),
     ]);
 
-    // After both complete, mailbox should be in a consistent state.
-    // Either recovery won (scheduled) or drain won (idle), but not
-    // corrupted.
     await t.run(async (ctx) => {
-      const mailbox = (await getMailboxRow(ctx, actorId))!;
-      expect(["idle", "scheduled"]).toContain(mailbox.drainKind);
+      const signal = (await getSignalRow(ctx, actorId))!;
+      expect(["idle", "scheduled"]).toContain(signal.drainKind);
     });
   });
 });

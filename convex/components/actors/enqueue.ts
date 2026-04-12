@@ -30,10 +30,10 @@ const vEnqueueArgs = {
 
 /**
  * Insert one `messages` row and one `pendingMessages` row per effect.
- * Lazy-creates the target actor + paired mailbox rows on first contact
+ * Lazy-creates the target actor + paired drain rows on first contact
  * via `getOrCreateActorRow`.
  *
- * After inserting all rows, kicks each distinct target mailbox at the
+ * After inserting all rows, kicks each distinct target actor at the
  * earliest `deliverAt` in the batch.
  *
  * `sendSeq` is assigned as the index within the `effects` array so that

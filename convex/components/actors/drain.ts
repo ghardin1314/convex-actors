@@ -3,15 +3,12 @@
  * drainLoop handler. `handleTransition` is factored out as a
  * self-contained scheduling state machine — it does work (queries +
  * scheduling) and returns the new drain state.
- *
- * Mailbox state is read once at the top, mutated in-memory, and
- * written once at the end.
  */
 import { v } from 'convex/values'
 import { internal } from './_generated/api.js'
 import type { Doc, Id } from './_generated/dataModel.js'
 import { internalMutation, type MutationCtx } from './_generated/server.js'
-import { getActorStateRow, getMailboxRow } from './actors.js'
+import { getActorStateRow, getBookkeepingRow, getSignalRow } from './actors.js'
 import { enqueueMessageHandler } from './enqueue.js'
 import type { ExecuteFnHandle } from './kick.js'
 import { createLogger, logLevel, type LogLevel } from './logging.js'
@@ -65,16 +62,16 @@ async function maybeRouteReply(
   )
 }
 
-/** Flat drain fields that get patched onto `mailboxState`. */
-type MailboxPatch = Pick<
-  Doc<'mailboxState'>,
-  'drainKind' | 'drainScheduledId' | 'drainAt' | 'drainStartedAt'
+type SignalPatch = Pick<Doc<'drainSignal'>, 'drainKind'>
+type BookkeepingPatch = Pick<
+  Doc<'drainBookkeeping'>,
+  'drainScheduledId' | 'drainAt' | 'drainStartedAt'
 >
 
 /**
  * After processing (or finding nothing to process), decide what's next
  * and schedule accordingly. Returns the new drain state — the caller
- * writes it as part of the single mailbox patch.
+ * writes it to `drainSignal` + `drainBookkeeping`.
  *
  * - More deliverable rows → schedule immediately, stay running
  * - Only future rows → schedule at deliverAt, transition to scheduled
@@ -86,7 +83,7 @@ async function handleTransition(
   generation: number,
   executeFn: string,
   level?: LogLevel,
-): Promise<MailboxPatch> {
+): Promise<{ signal: SignalPatch; bookkeeping: BookkeepingPatch }> {
   const t = now()
 
   const nextDeliverable = await ctx.db
@@ -104,10 +101,12 @@ async function handleTransition(
       logLevel: level,
     })
     return {
-      drainKind: 'running',
-      drainStartedAt: t,
-      drainScheduledId: undefined,
-      drainAt: undefined,
+      signal: { drainKind: 'running' },
+      bookkeeping: {
+        drainStartedAt: t,
+        drainScheduledId: undefined,
+        drainAt: undefined,
+      },
     }
   }
 
@@ -124,18 +123,22 @@ async function handleTransition(
       { actorId, generation, executeFn, logLevel: level },
     )
     return {
-      drainKind: 'scheduled',
-      drainScheduledId: scheduledId,
-      drainAt: deliverAt,
-      drainStartedAt: undefined,
+      signal: { drainKind: 'scheduled' },
+      bookkeeping: {
+        drainScheduledId: scheduledId,
+        drainAt: deliverAt,
+        drainStartedAt: undefined,
+      },
     }
   }
 
   return {
-    drainKind: 'idle',
-    drainScheduledId: undefined,
-    drainAt: undefined,
-    drainStartedAt: undefined,
+    signal: { drainKind: 'idle' },
+    bookkeeping: {
+      drainScheduledId: undefined,
+      drainAt: undefined,
+      drainStartedAt: undefined,
+    },
   }
 }
 
@@ -148,17 +151,15 @@ export const drainLoop = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    // TODO: consider splitting mailboxState into internal bookkeeping
-    // vs observable status to avoid OCC conflicts with status readers.
-
-    // ── Read mailbox once ───────────────────────────────────
-    const mailbox = await getMailboxRow(ctx, args.actorId)
-    if (!mailbox) throw new Error(`no mailboxState for actor ${args.actorId}`)
-    if (mailbox.generation !== args.generation) {
+    const signal = await getSignalRow(ctx, args.actorId)
+    if (!signal) throw new Error(`no drainSignal for actor ${args.actorId}`)
+    if (signal.generation !== args.generation) {
       throw new Error(
-        `stale drain: generation ${args.generation} !== ${mailbox.generation}`,
+        `stale drain: generation ${args.generation} !== ${signal.generation}`,
       )
     }
+    const bookkeeping = await getBookkeepingRow(ctx, args.actorId)
+    if (!bookkeeping) throw new Error(`no drainBookkeeping for actor ${args.actorId}`)
 
     const generation = args.generation + 1
     const logger = createLogger(args.logLevel)
@@ -176,14 +177,15 @@ export const drainLoop = internalMutation({
       .first()
 
     if (!pending) {
-      const mailboxPatch = await handleTransition(
+      const transition = await handleTransition(
         ctx,
         args.actorId,
         generation,
         args.executeFn,
         args.logLevel,
       )
-      await ctx.db.patch(mailbox._id, { generation, ...mailboxPatch })
+      await ctx.db.patch(signal._id, { generation, ...transition.signal })
+      await ctx.db.patch(bookkeeping._id, transition.bookkeeping)
       return null
     }
 
@@ -223,14 +225,15 @@ export const drainLoop = internalMutation({
         args.logLevel,
       )
       await ctx.db.delete(pending._id)
-      const mailboxPatch = await handleTransition(
+      const transition = await handleTransition(
         ctx,
         args.actorId,
         generation,
         args.executeFn,
         args.logLevel,
       )
-      await ctx.db.patch(mailbox._id, { generation, ...mailboxPatch })
+      await ctx.db.patch(signal._id, { generation, ...transition.signal })
+      await ctx.db.patch(bookkeeping._id, transition.bookkeeping)
       return null
     }
 
@@ -328,15 +331,16 @@ export const drainLoop = internalMutation({
       }
     }
 
-    // ── Transition + single mailbox write ───────────────────
-    const mailboxPatch = await handleTransition(
+    // ── Transition ──────────────────────────────────────────
+    const transition = await handleTransition(
       ctx,
       args.actorId,
       generation,
       args.executeFn,
       args.logLevel,
     )
-    await ctx.db.patch(mailbox._id, { generation, ...mailboxPatch })
+    await ctx.db.patch(signal._id, { generation, ...transition.signal })
+    await ctx.db.patch(bookkeeping._id, transition.bookkeeping)
     return null
   },
 })

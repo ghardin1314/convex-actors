@@ -5,14 +5,13 @@ import type { ExecuteFnHandle } from "./kick.js";
 
 /**
  * Row-level primitives for the `actor` table and its sibling
- * `mailboxState` row. These are plain async functions (not mutations) so
- * higher-level handlers like `enqueueMessage` can compose them inside a
- * single transaction.
+ * `drainSignal` + `drainBookkeeping` rows. These are plain async
+ * functions (not mutations) so higher-level handlers like
+ * `enqueueMessage` can compose them inside a single transaction.
  *
  * Invariant enforced here: every `actor` row has exactly one paired
- * `mailboxState` row, created in the same transaction as the actor.
- * Nothing else in the component is allowed to insert into `actor` or
- * `mailboxState` directly.
+ * `drainSignal` and one `drainBookkeeping` row, created in the same
+ * transaction as the actor.
  */
 
 /**
@@ -34,15 +33,10 @@ export async function getActorRow(
 
 /**
  * Idempotent lazy creation. On first call for a given `(actorType, name)`
- * this inserts the actor row and its paired `mailboxState` row
- * (`generation: 0`, `drainKind: "idle"`). On subsequent calls it
- * returns the existing rows untouched.
- *
- * The actor row is inserted with no `state` field. Populating initial
- * state is the drain loop's responsibility on first handler invocation,
- * since only the app-level execution path has access to the actor
- * definition (and therefore to `definition.initialState()` and the
- * `state` validator).
+ * this inserts the actor row and its paired `drainSignal` +
+ * `drainBookkeeping` rows. On subsequent calls it returns the existing
+ * actor + signal only — `drainBookkeeping` is deliberately excluded to
+ * keep enqueue's read set disjoint from drain's writes.
  */
 export async function getOrCreateActorRow(
   ctx: MutationCtx,
@@ -51,48 +45,52 @@ export async function getOrCreateActorRow(
     name: string;
     executeFn: ExecuteFnHandle;
   },
-): Promise<{ actor: Doc<"actor">; mailbox: Doc<"mailboxState"> }> {
+): Promise<{ actor: Doc<"actor">; signal: Doc<"drainSignal"> }> {
   const existing = await getActorRow(ctx, args.actorType, args.name);
   if (existing !== null) {
-    const mailbox = await getMailboxRow(ctx, existing._id);
-    // Paired insert below is the only writer into these tables, so a
-    // missing mailbox here means the invariant has been violated
-    // externally. Fail loudly rather than silently repairing.
-    if (mailbox === null) {
+    const signal = await getSignalRow(ctx, existing._id);
+    if (signal === null) {
       throw new Error(
-        `actor ${existing._id} has no mailboxState row — invariant violated`,
+        `actor ${existing._id} missing drainSignal row — invariant violated`,
       );
     }
-    return { actor: existing, mailbox };
+    return { actor: existing, signal };
   }
 
   const actorId = await ctx.db.insert("actor", {
     actorType: args.actorType,
     name: args.name,
   });
-  const mailboxId = await ctx.db.insert("mailboxState", {
+  const signalId = await ctx.db.insert("drainSignal", {
     actorId,
     generation: 0,
     drainKind: "idle",
+  });
+  await ctx.db.insert("drainBookkeeping", {
+    actorId,
     executeFn: args.executeFn,
   });
-  // Re-read so callers see the same `Doc<>` shape (with `_creationTime`)
-  // the index lookup path returns.
   const actor = (await ctx.db.get(actorId))!;
-  const mailbox = (await ctx.db.get(mailboxId))!;
-  return { actor, mailbox };
+  const signal = (await ctx.db.get(signalId))!;
+  return { actor, signal };
 }
 
-/**
- * Index lookup on `mailboxState.by_actor`. Split out because the drain
- * path reads it without touching the actor row.
- */
-export async function getMailboxRow(
+export async function getSignalRow(
   ctx: QueryCtx,
   actorId: Id<"actor">,
-): Promise<Doc<"mailboxState"> | null> {
+): Promise<Doc<"drainSignal"> | null> {
   return await ctx.db
-    .query("mailboxState")
+    .query("drainSignal")
+    .withIndex("by_actor", (q) => q.eq("actorId", actorId))
+    .unique();
+}
+
+export async function getBookkeepingRow(
+  ctx: QueryCtx,
+  actorId: Id<"actor">,
+): Promise<Doc<"drainBookkeeping"> | null> {
+  return await ctx.db
+    .query("drainBookkeeping")
     .withIndex("by_actor", (q) => q.eq("actorId", actorId))
     .unique();
 }
@@ -117,12 +115,12 @@ export const getMailboxInfo = query({
   handler: async (ctx, { actorType, name }) => {
     const actor = await getActorRow(ctx, actorType, name);
     if (!actor) return null;
-    const mailbox = await getMailboxRow(ctx, actor._id);
-    if (!mailbox) return null;
+    const signal = await getSignalRow(ctx, actor._id);
+    if (!signal) return null;
     return {
       actorId: actor._id,
-      generation: mailbox.generation,
-      drainKind: mailbox.drainKind,
+      generation: signal.generation,
+      drainKind: signal.drainKind,
     };
   },
 });
