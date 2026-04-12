@@ -1,21 +1,16 @@
 /**
- * Typed React hooks for interacting with actors.
+ * Client-side helpers for awaiting actor and saga outcomes from a
+ * `ConvexReactClient`. Intended for use inside tanstack-query
+ * `mutationFn`s so a single mutation can cover "fire + wait for
+ * terminal outcome" end-to-end.
  *
- * Usage:
- *   // once, at app level
- *   export const { useActor, useActorResponse } =
- *     createActorHooks(api.actorFunctions);
- *
- *   // in components
- *   const { send, peek } = useActor(counterDef, "alice");
- *   peek.count          // typed projection
- *   send("inc", { by: 1 })  // typechecked msg + payload
+ * There are deliberately no generic `useActor` / `useActorResponse`
+ * hooks here — the framework can't know how a given app wants to
+ * handle auth, validation, or rate-limiting, so every app wraps
+ * `system.send` / `system.peek` with its own typed queries and
+ * mutations and the UI talks to those.
  */
-import { useCallback } from "react";
 import type { ConvexReactClient } from "convex/react";
-import { useMutation } from "convex/react";
-import { useQuery } from "@tanstack/react-query";
-import { convexQuery } from "@convex-dev/react-query";
 import type {
   FunctionArgs,
   FunctionReference,
@@ -24,12 +19,9 @@ import type {
 import type {
   AnyProcess,
   MessageNamesOf,
-  ProjectionOf,
   ReturnOf,
 } from "./defineProcess";
 import type { SagaProjection } from "./defineSaga";
-import type { ScheduleOpts } from "./ctx";
-import type { z } from "zod";
 
 // Re-export saga projection types so app code can name them (prop
 // types, explicit annotations) without reaching past react.ts. The
@@ -44,123 +36,14 @@ export type {
 } from "./defineSaga";
 
 /**
- * Shape of the `api.actorFunctions` module — the three public Convex
- * functions that the hooks call under the hood.
- */
-export interface ActorApi {
-  send: FunctionReference<
-    "mutation",
-    "public",
-    {
-      actorType: string;
-      name: string;
-      msgType: string;
-      payload: unknown;
-      opts?: ScheduleOpts;
-    },
-    string
-  >;
-  peek: FunctionReference<
-    "query",
-    "public",
-    { actorType: string; name: string },
-    unknown
-  >;
-  getResponse: FunctionReference<
-    "query",
-    "public",
-    { messageId: string },
-    unknown
-  >;
-}
-
-/**
  * Shape of the `response` field in a committed message-response row.
  * Generic over the success `value` so a typed awaiter can narrow it
- * to the handler's declared return type; defaults to `unknown` for
- * the generic `useActorResponse` hook, which is keyed only by a bare
- * `messageId` and has no static handle on the source handler.
+ * to the handler's declared return type.
  */
 export type ActorResponse<T = unknown> =
   | { kind: "success"; value: T }
   | { kind: "fail"; reason: string; details?: unknown }
   | { kind: "defect"; error: string; attempts: number };
-
-/**
- * Create typed React hooks bound to your actor API functions.
- * Call once at app level, then use the returned hooks in components.
- */
-export function createActorHooks(actorApi: ActorApi) {
-  /**
-   * Typed process hook. Returns `send` and `peek` narrowed to the
-   * process definition's types. Accepts both actors and sagas — the
-   * send/peek API is process-agnostic.
-   */
-  function useActor<D extends AnyProcess>(
-    def: D,
-    name: string,
-  ): {
-    send: <M extends MessageNamesOf<D>>(
-      msgType: M,
-      payload: z.infer<D["messages"][M]["payload"]>,
-      opts?: ScheduleOpts,
-    ) => Promise<string>;
-    peek: ProjectionOf<D> | undefined;
-  } {
-    const sendMut = useMutation(actorApi.send);
-
-    const { data: projection } = useQuery(
-      convexQuery(actorApi.peek, { actorType: def.type, name }),
-    );
-
-    const send = useCallback(
-      <M extends MessageNamesOf<D>>(
-        msgType: M,
-        payload: z.infer<D["messages"][M]["payload"]>,
-        opts?: ScheduleOpts,
-      ) => {
-        return sendMut({
-          actorType: def.type,
-          name,
-          msgType: msgType,
-          payload,
-          opts,
-        });
-      },
-      [sendMut, def.type, name],
-    );
-
-    return {
-      send,
-      peek: projection as ProjectionOf<D> | undefined,
-    };
-  }
-
-  /**
-   * Poll for a message response by ID. Returns `null` while the
-   * message is still pending, or the response once committed.
-   * Pass `null` as messageId to skip the query.
-   */
-  function useActorResponse(
-    messageId: string | null,
-  ): {
-    messageId: string;
-    response: ActorResponse;
-  } | null | undefined {
-    const { data } = useQuery(
-      convexQuery(
-        actorApi.getResponse,
-        messageId ? { messageId } : "skip",
-      ),
-    );
-    return data as {
-      messageId: string;
-      response: ActorResponse;
-    } | null | undefined;
-  }
-
-  return { useActor, useActorResponse };
-}
 
 // ── Typed response awaiter ─────────────────────────────────────────
 

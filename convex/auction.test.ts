@@ -8,7 +8,7 @@
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { api } from "./_generated/api.js";
+import { internal } from "./_generated/api.js";
 import schema from "./schema.js";
 import componentSchema from "./components/actors/schema.js";
 
@@ -73,7 +73,7 @@ function send(
   msgType: string,
   payload: unknown,
 ) {
-  return t.mutation(api.actorFunctions.send, {
+  return t.mutation(internal.testHelpers.send, {
     actorType,
     name,
     msgType,
@@ -82,11 +82,11 @@ function send(
 }
 
 function peek(t: ConvexT, actorType: string, name: string) {
-  return t.query(api.actorFunctions.peek, { actorType, name });
+  return t.query(internal.testHelpers.peek, { actorType, name });
 }
 
 function getResponse(t: ConvexT, messageId: string) {
-  return t.query(api.actorFunctions.getResponse, { messageId });
+  return t.query(internal.testHelpers.getResponse, { messageId });
 }
 
 type AuctionProjection = {

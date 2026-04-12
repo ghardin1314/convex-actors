@@ -8,7 +8,6 @@
  * @module
  */
 
-import type * as actorFunctions from "../actorFunctions.js";
 import type * as actors_account from "../actors/account.js";
 import type * as actors_auction from "../actors/auction.js";
 import type * as actors_auctionHouse from "../actors/auctionHouse.js";
@@ -18,6 +17,7 @@ import type * as actors_settlementSaga from "../actors/settlementSaga.js";
 import type * as actors_userBids from "../actors/userBids.js";
 import type * as auctions from "../auctions.js";
 import type * as system from "../system.js";
+import type * as testHelpers from "../testHelpers.js";
 
 import type {
   ApiFromModules,
@@ -26,7 +26,6 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  actorFunctions: typeof actorFunctions;
   "actors/account": typeof actors_account;
   "actors/auction": typeof actors_auction;
   "actors/auctionHouse": typeof actors_auctionHouse;
@@ -36,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   "actors/userBids": typeof actors_userBids;
   auctions: typeof auctions;
   system: typeof system;
+  testHelpers: typeof testHelpers;
 }>;
 
 /**
