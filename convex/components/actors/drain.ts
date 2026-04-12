@@ -11,7 +11,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api.js'
 import type { Doc, Id } from './_generated/dataModel.js'
 import { internalMutation, type MutationCtx } from './_generated/server.js'
-import { getMailboxRow } from './actors.js'
+import { getActorStateRow, getMailboxRow } from './actors.js'
 import { enqueueMessageHandler } from './enqueue.js'
 import type { ExecuteFnHandle } from './kick.js'
 import { createLogger, logLevel, type LogLevel } from './logging.js'
@@ -251,7 +251,12 @@ export const drainLoop = internalMutation({
     // ── Commit outcome ──────────────────────────────────────
     if (result.outcome === 'success') {
       recordCompleted(logger, { ...eventBase, outcome: 'success', attempts: pending.attempts })
-      await ctx.db.patch(args.actorId, { state: result.newState })
+      const existingState = await getActorStateRow(ctx, args.actorId)
+      if (existingState) {
+        await ctx.db.patch(existingState._id, { state: result.newState })
+      } else {
+        await ctx.db.insert('actorState', { actorId: args.actorId, state: result.newState })
+      }
 
       if (result.effects.length > 0) {
         await enqueueMessageHandler(

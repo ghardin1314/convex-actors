@@ -41,9 +41,6 @@ describe("getOrCreateActorRow", () => {
 
       expect(actor.actorType).toBe("counter");
       expect(actor.name).toBe("a");
-      // State is populated by the drain loop on first handler
-      // invocation, not by the component.
-      expect(actor.state).toBeUndefined();
 
       expect(mailbox.actorId).toBe(actor._id);
       expect(mailbox.generation).toBe(0);
@@ -67,7 +64,7 @@ describe("getOrCreateActorRow", () => {
         executeFn,
       });
       // Simulate the drain loop populating state after first creation.
-      await ctx.db.patch(first.actor._id, { state: { n: 42 } });
+      await ctx.db.insert("actorState", { actorId: first.actor._id, state: { n: 42 } });
 
       const second = await getOrCreateActorRow(ctx, {
         actorType: "counter",
@@ -77,7 +74,6 @@ describe("getOrCreateActorRow", () => {
 
       expect(second.actor._id).toBe(first.actor._id);
       expect(second.mailbox._id).toBe(first.mailbox._id);
-      expect(second.actor.state).toEqual({ n: 42 });
 
       // Still exactly one pair.
       expect(await ctx.db.query("actor").collect()).toHaveLength(1);

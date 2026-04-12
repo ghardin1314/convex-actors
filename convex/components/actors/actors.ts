@@ -98,21 +98,19 @@ export async function getMailboxRow(
 }
 
 /**
- * Registered query so the app-level `peek` factory can read actor state
- * via `ctx.runQuery(component.actors.getActorState, ...)`. Returns the
- * raw `state` field (which is `v.optional(v.any())` on the schema) or
- * `null` if the actor has never been addressed.
- *
- * The app-level `peek` runs `definition.project(state)` in-process on
- * the returned value — the component has no knowledge of projection
- * functions.
+ * Read the `actorState` row for a given actor. Returns `null` if no
+ * state has been written yet (i.e. no message has been processed).
  */
-/**
- * Returns the actorId, current mailbox generation, and drain kind for
- * a given `(actorType, name)`. Used by the app-level drain test helper
- * `drainUntilIdle` which needs to know whether to keep draining and
- * what generation to pass. Returns `null` if the actor doesn't exist.
- */
+export async function getActorStateRow(
+  ctx: QueryCtx,
+  actorId: Id<"actor">,
+): Promise<Doc<"actorState"> | null> {
+  return await ctx.db
+    .query("actorState")
+    .withIndex("by_actor", (q) => q.eq("actorId", actorId))
+    .unique();
+}
+
 export const getMailboxInfo = query({
   args: { actorType: v.string(), name: v.string() },
   returns: v.any(),
@@ -135,9 +133,7 @@ export const getActorState = query({
   handler: async (ctx, { actorType, name }) => {
     const actor = await getActorRow(ctx, actorType, name);
     if (actor === null) return null;
-    // `state` is `v.optional(v.any())` — absent until the drain loop
-    // processes the first message. Return `null` to signal "no state
-    // yet" uniformly with "actor doesn't exist".
-    return actor.state ?? null;
+    const stateRow = await getActorStateRow(ctx, actor._id);
+    return stateRow?.state ?? null;
   },
 });

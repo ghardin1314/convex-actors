@@ -7,7 +7,7 @@ import { z } from "zod";
 import { v } from "convex/values";
 import { createDraft, finishDraft } from "immer";
 import { internalMutation } from "./_generated/server.js";
-import { getActorRow } from "./actors.js";
+import { getActorRow, getActorStateRow } from "./actors.js";
 import { createLogger, type LogLevel } from "./logging.js";
 import { createProcessCtx, FailSentinel } from "./client/ctx.js";
 import type { AnyProcess } from "./client/defineProcess.js";
@@ -112,10 +112,8 @@ export const testExecute = internalMutation({
     }
 
     const actor = await getActorRow(ctx, args.actorType, args.actorName);
-    const currentState =
-      actor?.state !== null && actor?.state !== undefined
-        ? actor.state
-        : def.initialState();
+    const stateRow = actor ? await getActorStateRow(ctx, actor._id) : null;
+    const currentState = stateRow?.state ?? def.initialState();
 
     const { ctx: processCtx, internals } = createProcessCtx({
       selfDefinition: def,
@@ -124,10 +122,12 @@ export const testExecute = internalMutation({
       logger: createLogger(args.logLevel as LogLevel),
       peekFn: async (actorType, name) => {
         const target = await getActorRow(ctx, actorType, name);
-        if (!target?.state) return null;
+        if (!target) return null;
+        const targetState = await getActorStateRow(ctx, target._id);
+        if (!targetState) return null;
         const targetDef = defsByType.get(actorType);
         if (!targetDef?.project) return null;
-        return targetDef.project(target.state);
+        return targetDef.project(targetState.state);
       },
     });
 
