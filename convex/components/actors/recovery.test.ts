@@ -50,12 +50,13 @@ describe("listStuckMailboxes", () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { signal } = await getOrCreateActorRow(ctx, {
+      const { actor } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
-      const bk = (await getBookkeepingRow(ctx, signal.actorId))!;
+      const signal = (await getSignalRow(ctx, actor._id))!;
+      const bk = (await getBookkeepingRow(ctx, actor._id))!;
       await ctx.db.patch(signal._id, {
         drainKind: "running",
       });
@@ -72,12 +73,13 @@ describe("listStuckMailboxes", () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { signal } = await getOrCreateActorRow(ctx, {
+      const { actor } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
-      const bk = (await getBookkeepingRow(ctx, signal.actorId))!;
+      const signal = (await getSignalRow(ctx, actor._id))!;
+      const bk = (await getBookkeepingRow(ctx, actor._id))!;
       await ctx.db.patch(signal._id, {
         drainKind: "running",
       });
@@ -97,11 +99,12 @@ describe("listStuckMailboxes", () => {
       // idle
       await getOrCreateActorRow(ctx, { actorType: "counter", name: "a", executeFn });
       // scheduled
-      const { actor, signal } = await getOrCreateActorRow(ctx, {
+      const { actor } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "b",
         executeFn,
       });
+      const signal = (await getSignalRow(ctx, actor._id))!;
       const bk = (await getBookkeepingRow(ctx, actor._id))!;
       const scheduledId = await ctx.scheduler.runAt(
         T0 + 5000,
@@ -128,11 +131,12 @@ describe("recoverMailbox", () => {
     const t = convexTest(schema, modules);
     const actorId = await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { actor, signal } = await getOrCreateActorRow(ctx, {
+      const { actor } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
+      const signal = (await getSignalRow(ctx, actor._id))!;
       const bk = (await getBookkeepingRow(ctx, actor._id))!;
       await ctx.db.patch(signal._id, {
         drainKind: "running",
@@ -158,11 +162,12 @@ describe("recoverMailbox", () => {
     const t = convexTest(schema, modules);
     const actorId = await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { actor, signal } = await getOrCreateActorRow(ctx, {
+      const { actor } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
+      const signal = (await getSignalRow(ctx, actor._id))!;
       const bk = (await getBookkeepingRow(ctx, actor._id))!;
       await ctx.db.patch(signal._id, {
         drainKind: "running",
@@ -206,11 +211,12 @@ describe("recoverMailbox", () => {
     const t = convexTest(schema, modules);
     const actorId = await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { actor, signal } = await getOrCreateActorRow(ctx, {
+      const { actor } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
+      const signal = (await getSignalRow(ctx, actor._id))!;
       const bk = (await getBookkeepingRow(ctx, actor._id))!;
       await ctx.db.patch(signal._id, {
         generation: 5,

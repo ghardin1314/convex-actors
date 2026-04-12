@@ -32,11 +32,12 @@ describe('kickMailbox', () => {
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle()
-      const { actor, signal } = await getOrCreateActorRow(ctx, {
+      const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
         executeFn,
       })
+      const signal = (await getSignalRow(ctx, actor._id))!
       expect(signal.generation).toBe(0)
       expect(signal.drainKind).toBe('idle')
 
@@ -275,11 +276,12 @@ describe('kickMailbox', () => {
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle()
-      const { actor, signal } = await getOrCreateActorRow(ctx, {
+      const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
         executeFn,
       })
+      const signal = (await getSignalRow(ctx, actor._id))!
       await ctx.db.patch(signal._id, {
         generation: 42,
         drainKind: 'running',
@@ -306,11 +308,12 @@ describe('kickMailbox', () => {
     const t = convexTest(schema, modules)
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle()
-      const { actor, signal } = await getOrCreateActorRow(ctx, {
+      const { actor } = await getOrCreateActorRow(ctx, {
         actorType: 'counter',
         name: 'a',
         executeFn,
       })
+      const signal = (await getSignalRow(ctx, actor._id))!
       const bookkeeping = (await getBookkeepingRow(ctx, actor._id))!
 
       const staleScheduledId = await ctx.scheduler.runAt(

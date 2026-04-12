@@ -34,7 +34,7 @@ describe("getOrCreateActorRow", () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { actor, signal } = await getOrCreateActorRow(ctx, {
+      const { actor } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
@@ -43,9 +43,11 @@ describe("getOrCreateActorRow", () => {
       expect(actor.actorType).toBe("counter");
       expect(actor.name).toBe("a");
 
-      expect(signal.actorId).toBe(actor._id);
-      expect(signal.generation).toBe(0);
-      expect(signal.drainKind).toBe("idle");
+      const signal = await getSignalRow(ctx, actor._id);
+      expect(signal).not.toBeNull();
+      expect(signal!.actorId).toBe(actor._id);
+      expect(signal!.generation).toBe(0);
+      expect(signal!.drainKind).toBe("idle");
 
       const bk = await getBookkeepingRow(ctx, actor._id);
       expect(bk).not.toBeNull();
@@ -79,7 +81,6 @@ describe("getOrCreateActorRow", () => {
       });
 
       expect(second.actor._id).toBe(first.actor._id);
-      expect(second.signal._id).toBe(first.signal._id);
 
       expect(await ctx.db.query("actor").collect()).toHaveLength(1);
       expect(await ctx.db.query("drainSignal").collect()).toHaveLength(1);
@@ -110,7 +111,10 @@ describe("getOrCreateActorRow", () => {
       const ids = new Set([a.actor._id, b.actor._id, c.actor._id]);
       expect(ids.size).toBe(3);
 
-      const signalIds = new Set([a.signal._id, b.signal._id, c.signal._id]);
+      const signalA = await getSignalRow(ctx, a.actor._id);
+      const signalB = await getSignalRow(ctx, b.actor._id);
+      const signalC = await getSignalRow(ctx, c.actor._id);
+      const signalIds = new Set([signalA!._id, signalB!._id, signalC!._id]);
       expect(signalIds.size).toBe(3);
 
       expect((await getActorRow(ctx, "counter", "a"))?._id).toBe(a.actor._id);
@@ -125,13 +129,14 @@ describe("getSignalRow / getBookkeepingRow", () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       const executeFn = await makeExecuteHandle();
-      const { actor, signal } = await getOrCreateActorRow(ctx, {
+      const { actor } = await getOrCreateActorRow(ctx, {
         actorType: "counter",
         name: "a",
         executeFn,
       });
       const foundSignal = await getSignalRow(ctx, actor._id);
-      expect(foundSignal?._id).toBe(signal._id);
+      expect(foundSignal).not.toBeNull();
+      expect(foundSignal!.actorId).toBe(actor._id);
       const foundBk = await getBookkeepingRow(ctx, actor._id);
       expect(foundBk).not.toBeNull();
       expect(foundBk!.actorId).toBe(actor._id);

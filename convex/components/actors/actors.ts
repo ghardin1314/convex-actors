@@ -34,9 +34,9 @@ export async function getActorRow(
 /**
  * Idempotent lazy creation. On first call for a given `(actorType, name)`
  * this inserts the actor row and its paired `drainSignal` +
- * `drainBookkeeping` rows. On subsequent calls it returns the existing
- * actor + signal only — `drainBookkeeping` is deliberately excluded to
- * keep enqueue's read set disjoint from drain's writes.
+ * `drainBookkeeping` rows. On subsequent calls it returns just the
+ * existing actor — no signal/bookkeeping reads, keeping enqueue's read
+ * set minimal.
  */
 export async function getOrCreateActorRow(
   ctx: MutationCtx,
@@ -45,23 +45,17 @@ export async function getOrCreateActorRow(
     name: string;
     executeFn: ExecuteFnHandle;
   },
-): Promise<{ actor: Doc<"actor">; signal: Doc<"drainSignal"> }> {
+): Promise<{ actor: Doc<"actor"> }> {
   const existing = await getActorRow(ctx, args.actorType, args.name);
   if (existing !== null) {
-    const signal = await getSignalRow(ctx, existing._id);
-    if (signal === null) {
-      throw new Error(
-        `actor ${existing._id} missing drainSignal row — invariant violated`,
-      );
-    }
-    return { actor: existing, signal };
+    return { actor: existing };
   }
 
   const actorId = await ctx.db.insert("actor", {
     actorType: args.actorType,
     name: args.name,
   });
-  const signalId = await ctx.db.insert("drainSignal", {
+  await ctx.db.insert("drainSignal", {
     actorId,
     generation: 0,
     drainKind: "idle",
@@ -71,8 +65,7 @@ export async function getOrCreateActorRow(
     executeFn: args.executeFn,
   });
   const actor = (await ctx.db.get(actorId))!;
-  const signal = (await ctx.db.get(signalId))!;
-  return { actor, signal };
+  return { actor };
 }
 
 export async function getSignalRow(
