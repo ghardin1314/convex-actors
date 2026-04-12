@@ -14,11 +14,11 @@
  * don't pay for an idle rescheduler.
  */
 import { z } from 'zod'
-import { defineActor } from './components/actors/client'
+import { defineActor } from '../components/actors/client'
 // Import is cyclic (auction → auctionHouse for reportState). ESM handles
 // the cycle fine because the binding is only read inside handlers, not
 // at module evaluation time.
-import { auction } from './auctionActors'
+import { auction } from './auction'
 
 // ── Config ───────────────────────────────────────────────────────
 

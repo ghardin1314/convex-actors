@@ -6,7 +6,7 @@
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { mutation, query } from './_generated/server'
-import { system } from './actors'
+import { system } from './system'
 
 export const send = mutation({
   args: {
@@ -22,7 +22,7 @@ export const send = mutation({
   handler: async (ctx, args): Promise<string> => {
     return await system.sendRaw(
       ctx,
-      internal.actors.execute,
+      internal.system.execute,
       args.actorType,
       args.name,
       args.msgType,

@@ -1,136 +1,30 @@
 /**
- * Auction house demo actors — Phases 1 and 2.
+ * Single auction instance — a full state machine with timer-driven
+ * transitions and snipe protection. Created by and reports state back
+ * to the `auctionHouse` supervisor.
  *
- * Phase 1 shipped `account` and `auction` on their own; Phase 2 wires
- * them into the wider system:
- *   - Every auction phase transition / accepted bid fires a
- *     `reportState` send to `auctionHouse:"main"` (fire-and-forget).
- *   - The `going_twice` tick with a winning bid kicks off a
- *     `settlementSaga`, which drives the auction through
- *     `settling → sold` (or `settlement_failed` on rollback).
- *   - The auction handles the saga's callbacks via `settlementComplete`
- *     and `settlementFailed`.
+ * Every phase transition / accepted bid fires a `reportState` send to
+ * `auctionHouse:"main"` (fire-and-forget). The `going_twice` tick with
+ * a winning bid kicks off a `settlementSaga`, which drives the auction
+ * through `settling → sold` (or `settlement_failed` on rollback). The
+ * auction handles the saga's callbacks via `settlementComplete` and
+ * `settlementFailed`.
  *
- * Cyclic module imports (`auctionActors ↔ auctionHouse`,
- * `auctionActors ↔ auctionSagas`) are intentional — the bindings are
- * only ever read inside handler bodies, so ESM live-bindings resolve
- * at invocation time rather than module evaluation time.
+ * Cyclic module imports (`auction ↔ auctionHouse`, `auction ↔ auctionSagas`)
+ * are intentional — the bindings are only ever read inside handler
+ * bodies, so ESM live-bindings resolve at invocation time rather than
+ * module evaluation time.
  *
  * See DEMO.md for the full design.
  */
 import { z } from 'zod'
-import { defineActor } from './components/actors/client'
-import type { ActorHandlerCtx } from './components/actors/client'
+import { defineActor } from '../components/actors/client'
+import type { ActorHandlerCtx } from '../components/actors/client'
+import { account } from './account'
 import { auctionHouse } from './auctionHouse'
-import { settlementSaga } from './auctionSagas'
+import { settlementSaga } from './settlementSaga'
 
-// ── account ─────────────────────────────────────────────────────
-
-export const account = defineActor({
-  type: 'account',
-  state: z.object({
-    balance: z.number(),
-    /** holdId -> amount reserved (uncommitted). */
-    holds: z.record(z.string(), z.number()),
-  }),
-  messages: {
-    deposit: { payload: z.object({ amount: z.number() }) },
-    hold: { payload: z.object({ holdId: z.string(), amount: z.number() }) },
-    releaseHold: { payload: z.object({ holdId: z.string() }) },
-    settleHold: { payload: z.object({ holdId: z.string() }) },
-  },
-  initialState: () => ({ balance: 0, holds: {} }),
-  project: (state) => {
-    const heldTotal = Object.values(state.holds).reduce((s, n) => s + n, 0)
-    return {
-      balance: state.balance,
-      availableBalance: state.balance - heldTotal,
-    }
-  },
-  handle: {
-    deposit: async (state, { amount }) => {
-      state.balance += amount
-    },
-
-    hold: async (state, { holdId, amount }, ctx) => {
-      if (state.holds[holdId] !== undefined) {
-        ctx.fail('hold_exists', { holdId })
-      }
-      const heldTotal = Object.values(state.holds).reduce((s, n) => s + n, 0)
-      const available = state.balance - heldTotal
-      if (amount > available) {
-        ctx.fail('insufficient_funds', { requested: amount, available })
-      }
-      state.holds[holdId] = amount
-    },
-
-    releaseHold: async (state, { holdId }) => {
-      // Idempotent: releasing an unknown hold is a no-op so duplicate
-      // release messages (e.g. a displaced bidder releasing twice) don't
-      // blow up the account.
-      delete state.holds[holdId]
-    },
-
-    settleHold: async (state, { holdId }, ctx) => {
-      const amount = state.holds[holdId]
-      if (amount === undefined) {
-        ctx.fail('hold_not_found', { holdId })
-      }
-      state.balance -= amount
-      delete state.holds[holdId]
-    },
-  },
-})
-
-// ── userBids ────────────────────────────────────────────────────
-
-/**
- * Per-user bid index. Keyed by bidder name, records every bid attempt
- * the user has initiated via `bidSaga`. The saga fire-and-forgets an
- * `append` here at the start of its `holdFunds` step so the index
- * exists before any downstream steps run; `append` is idempotent on
- * `idempotencyKey` so saga retries don't create duplicates.
- *
- * Status of each bid (pending / active / compensated / etc.) lives in
- * the bidSaga itself — the UI reads it by peeking each saga via
- * `auctions.getBidStatus`. This actor is just the index.
- */
-export const userBids = defineActor({
-  type: 'userBids',
-  state: z.object({
-    bids: z.array(
-      z.object({
-        idempotencyKey: z.string(),
-        auctionName: z.string(),
-        amount: z.number(),
-        placedAt: z.number(),
-      }),
-    ),
-  }),
-  messages: {
-    append: {
-      payload: z.object({
-        idempotencyKey: z.string(),
-        auctionName: z.string(),
-        amount: z.number(),
-      }),
-    },
-  },
-  initialState: () => ({ bids: [] }),
-  project: (state) => ({ bids: state.bids }),
-  handle: {
-    append: async (state, { idempotencyKey, auctionName, amount }, ctx) => {
-      // Idempotent: saga retries hit this path with the same key.
-      if (state.bids.some((b) => b.idempotencyKey === idempotencyKey)) return
-      state.bids = [
-        ...state.bids,
-        { idempotencyKey, auctionName, amount, placedAt: ctx.now() },
-      ]
-    },
-  },
-})
-
-// ── auction ─────────────────────────────────────────────────────
+// ── Schemas ─────────────────────────────────────────────────────
 
 const auctionConfigSchema = z.object({
   durationMs: z.number(),
@@ -185,6 +79,8 @@ const BIDDABLE_PHASES: ReadonlySet<AuctionPhase> = new Set([
   'going_once',
   'going_twice',
 ])
+
+// ── Actor ───────────────────────────────────────────────────────
 
 export const auction = defineActor({
   type: 'auction',

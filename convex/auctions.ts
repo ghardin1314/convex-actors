@@ -10,10 +10,14 @@
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
-import { system } from './actors'
-import { account, auction, userBids } from './auctionActors'
-import { auctionHouse } from './auctionHouse'
-import { bidSaga } from './auctionSagas'
+import { system } from './system'
+import {
+  account,
+  auction,
+  auctionHouse,
+  bidSaga,
+  userBids,
+} from './actors'
 
 // ── Validators ──────────────────────────────────────────────────
 
@@ -82,7 +86,7 @@ export const deposit = mutation({
     }
     return await system.send(
       ctx,
-      internal.actors.execute,
+      internal.system.execute,
       account,
       user,
       'deposit',
@@ -116,7 +120,7 @@ export const createAuction = mutation({
     // TODO: Add a nicer way to get message response w/auth, etc.
     return await system.send(
       ctx,
-      internal.actors.execute,
+      internal.system.execute,
       auctionHouse,
       'main',
       'createAuction',
@@ -150,7 +154,7 @@ export const placeBid = mutation({
     // layer doesn't need to know about it.
     return await system.send(
       ctx,
-      internal.actors.execute,
+      internal.system.execute,
       bidSaga,
       idempotencyKey,
       'start',

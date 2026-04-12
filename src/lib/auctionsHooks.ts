@@ -23,8 +23,7 @@ import {
 // generics only need their inferred types, so handler code (which may
 // transitively reference server-only modules) never bundles into the
 // client.
-import type { account } from '../../convex/auctionActors'
-import type { auctionHouse } from '../../convex/auctionHouse'
+import type { account, auctionHouse } from '../../convex/actors'
 
 // Module-level awaiter bound to this app's public getResponse query.
 // Call per message as `awaitMessageResponse<typeof actor, 'msgName'>(convex, id)`.

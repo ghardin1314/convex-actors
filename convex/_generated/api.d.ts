@@ -9,11 +9,15 @@
  */
 
 import type * as actorFunctions from "../actorFunctions.js";
-import type * as actors from "../actors.js";
-import type * as auctionActors from "../auctionActors.js";
-import type * as auctionHouse from "../auctionHouse.js";
-import type * as auctionSagas from "../auctionSagas.js";
+import type * as actors_account from "../actors/account.js";
+import type * as actors_auction from "../actors/auction.js";
+import type * as actors_auctionHouse from "../actors/auctionHouse.js";
+import type * as actors_bidSaga from "../actors/bidSaga.js";
+import type * as actors_index from "../actors/index.js";
+import type * as actors_settlementSaga from "../actors/settlementSaga.js";
+import type * as actors_userBids from "../actors/userBids.js";
 import type * as auctions from "../auctions.js";
+import type * as system from "../system.js";
 
 import type {
   ApiFromModules,
@@ -23,11 +27,15 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   actorFunctions: typeof actorFunctions;
-  actors: typeof actors;
-  auctionActors: typeof auctionActors;
-  auctionHouse: typeof auctionHouse;
-  auctionSagas: typeof auctionSagas;
+  "actors/account": typeof actors_account;
+  "actors/auction": typeof actors_auction;
+  "actors/auctionHouse": typeof actors_auctionHouse;
+  "actors/bidSaga": typeof actors_bidSaga;
+  "actors/index": typeof actors_index;
+  "actors/settlementSaga": typeof actors_settlementSaga;
+  "actors/userBids": typeof actors_userBids;
   auctions: typeof auctions;
+  system: typeof system;
 }>;
 
 /**
