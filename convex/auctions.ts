@@ -10,7 +10,7 @@
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { mutation, query } from './_generated/server'
-import { account, auction, auctionHouse, bidSaga, userBids } from './actors'
+import { account, auction, auctionHouse, bidSaga, userBids } from './actorDefs'
 import { system } from './system'
 
 // ── Validators ──────────────────────────────────────────────────

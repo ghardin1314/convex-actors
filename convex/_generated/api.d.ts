@@ -8,13 +8,13 @@
  * @module
  */
 
-import type * as actors_account from "../actors/account.js";
-import type * as actors_auction from "../actors/auction.js";
-import type * as actors_auctionHouse from "../actors/auctionHouse.js";
-import type * as actors_bidSaga from "../actors/bidSaga.js";
-import type * as actors_index from "../actors/index.js";
-import type * as actors_settlementSaga from "../actors/settlementSaga.js";
-import type * as actors_userBids from "../actors/userBids.js";
+import type * as actorDefs_account from "../actorDefs/account.js";
+import type * as actorDefs_auction from "../actorDefs/auction.js";
+import type * as actorDefs_auctionHouse from "../actorDefs/auctionHouse.js";
+import type * as actorDefs_bidSaga from "../actorDefs/bidSaga.js";
+import type * as actorDefs_index from "../actorDefs/index.js";
+import type * as actorDefs_settlementSaga from "../actorDefs/settlementSaga.js";
+import type * as actorDefs_userBids from "../actorDefs/userBids.js";
 import type * as auctions from "../auctions.js";
 import type * as system from "../system.js";
 import type * as testHelpers from "../testHelpers.js";
@@ -26,13 +26,13 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  "actors/account": typeof actors_account;
-  "actors/auction": typeof actors_auction;
-  "actors/auctionHouse": typeof actors_auctionHouse;
-  "actors/bidSaga": typeof actors_bidSaga;
-  "actors/index": typeof actors_index;
-  "actors/settlementSaga": typeof actors_settlementSaga;
-  "actors/userBids": typeof actors_userBids;
+  "actorDefs/account": typeof actorDefs_account;
+  "actorDefs/auction": typeof actorDefs_auction;
+  "actorDefs/auctionHouse": typeof actorDefs_auctionHouse;
+  "actorDefs/bidSaga": typeof actorDefs_bidSaga;
+  "actorDefs/index": typeof actorDefs_index;
+  "actorDefs/settlementSaga": typeof actorDefs_settlementSaga;
+  "actorDefs/userBids": typeof actorDefs_userBids;
   auctions: typeof auctions;
   system: typeof system;
   testHelpers: typeof testHelpers;

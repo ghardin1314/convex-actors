@@ -1,5 +1,5 @@
 import { components } from './_generated/api'
-import { ActorsDefs } from './actors'
+import { ActorsDefs } from './actorDefs'
 import { ActorSystem, makeExecute } from './components/actors/client'
 
 // ── Wire-up ─────────────────────────────────────────────────────
