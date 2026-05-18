@@ -14,16 +14,31 @@ export const Route = createRootRouteWithContext<{
 }>()({
   head: () => ({
     meta: [
+      { charSet: 'utf-8' },
+      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+      { title: 'Convex Actors Auction Demo' },
       {
-        charSet: 'utf-8',
+        name: 'description',
+        content:
+          'A real-time auction house demo showcasing durable actors, sagas, reactive state, and crash recovery on Convex.',
       },
+      { property: 'og:type', content: 'website' },
+      { property: 'og:site_name', content: 'Convex Actors' },
+      { property: 'og:title', content: 'Convex Actors Auction Demo' },
       {
-        name: 'viewport',
-        content: 'width=device-width, initial-scale=1',
+        property: 'og:description',
+        content:
+          'Explore a live auction dashboard powered by Convex actors and sagas.',
       },
+      { property: 'og:image', content: '/favicon.svg' },
+      { name: 'twitter:card', content: 'summary' },
+      { name: 'twitter:title', content: 'Convex Actors Auction Demo' },
       {
-        title: 'TanStack Start Starter',
+        name: 'twitter:description',
+        content:
+          'A real-time auction dashboard powered by Convex actors and sagas.',
       },
+      { name: 'theme-color', content: '#020617' },
     ],
     links: [
       { rel: 'stylesheet', href: appCss },
@@ -32,20 +47,14 @@ export const Route = createRootRouteWithContext<{
         sizes: '180x180',
         href: '/apple-touch-icon.png',
       },
+      { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },
       {
         rel: 'icon',
         type: 'image/png',
         sizes: '32x32',
         href: '/favicon-32x32.png',
       },
-      {
-        rel: 'icon',
-        type: 'image/png',
-        sizes: '16x16',
-        href: '/favicon-16x16.png',
-      },
-      { rel: 'manifest', href: '/site.webmanifest', color: '#fffff' },
-      { rel: 'icon', href: '/favicon.ico' },
+      { rel: 'manifest', href: '/site.webmanifest' },
     ],
   }),
   notFoundComponent: () => <div>Route not found</div>,

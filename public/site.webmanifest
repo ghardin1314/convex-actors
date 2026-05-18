@@ -1,7 +1,13 @@
 {
-  "name": "",
-  "short_name": "",
+  "name": "Convex Actors Auction Demo",
+  "short_name": "Convex Actors",
+  "description": "A real-time auction house demo powered by Convex actors and sagas.",
   "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
     {
       "src": "/android-chrome-192x192.png",
       "sizes": "192x192",
@@ -13,7 +19,7 @@
       "type": "image/png"
     }
   ],
-  "theme_color": "#ffffff",
-  "background_color": "#ffffff",
+  "theme_color": "#020617",
+  "background_color": "#020617",
   "display": "standalone"
 }

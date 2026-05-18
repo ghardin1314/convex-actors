@@ -12,6 +12,22 @@ import { BIDDERS, type Bidder } from '../../lib/demoUsers'
 import { PhaseBadge, formatRemaining, useNowTick } from './-ui'
 
 export const Route = createFileRoute('/auctions/$name')({
+  head: ({ params }) => {
+    const title = `Auction ${params.name} | Convex Actors`
+    const description =
+      'Auction detail view with live bidding, account holds, bid sagas, settlement, and reactive Convex actor state.'
+    return {
+      meta: [
+        { title },
+        { name: 'description', content: description },
+        { property: 'og:title', content: title },
+        { property: 'og:description', content: description },
+        { name: 'twitter:title', content: title },
+        { name: 'twitter:description', content: description },
+      ],
+      links: [{ rel: 'canonical', href: `/auctions/${params.name}` }],
+    }
+  },
   component: AuctionDetail,
 })
 

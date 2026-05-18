@@ -5,6 +5,29 @@ import { SELLER } from '../lib/demoUsers'
 import { PhaseBadge, CountdownDisplay } from './auctions/-ui'
 
 export const Route = createFileRoute('/')({
+  head: () => ({
+    meta: [
+      { title: 'Auction Lobby | Convex Actors' },
+      {
+        name: 'description',
+        content:
+          'Create auctions, place bids, and watch Convex actors coordinate durable real-time workflows.',
+      },
+      { property: 'og:title', content: 'Auction Lobby | Convex Actors' },
+      {
+        property: 'og:description',
+        content:
+          'A live auction house demo for the Convex Actors framework.',
+      },
+      { name: 'twitter:title', content: 'Auction Lobby | Convex Actors' },
+      {
+        name: 'twitter:description',
+        content:
+          'Create auctions and watch actor-driven sagas settle bids in real time.',
+      },
+    ],
+    links: [{ rel: 'canonical', href: '/' }],
+  }),
   component: AuctionLobby,
 })
 
