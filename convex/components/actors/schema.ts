@@ -1,6 +1,5 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
-import { logLevel } from './logging.js'
 import { vDrainKind, vReplyTo, vResponse } from './shared.js'
 
 export default defineSchema({
